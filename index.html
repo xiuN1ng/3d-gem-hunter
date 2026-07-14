@@ -1,1 +1,116 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/><meta name="theme-color" content="#06120f"/><title>宝石猎人</title></head><body><div id="app"></div><script type="module" src="/src/main.js"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#060b09" />
+    <meta name="description" content="宝石猎人——一个程序化生成原石并亲手开石的 Three.js 3D 游戏原型。" />
+    <title>宝石猎人 · 开石原型</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-seal" aria-hidden="true"><span>玉</span></div>
+          <div>
+            <p class="eyebrow">GEM HUNTER</p>
+            <h1>宝石猎人</h1>
+          </div>
+        </div>
+        <div class="top-status">
+          <div class="status-item"><span class="status-label">资金</span><strong id="funds">¥128,600</strong></div>
+          <div class="status-rule"></div>
+          <div class="status-item day"><span class="status-label">行程</span><strong>第 <span id="day">1</span> 天</strong></div>
+        </div>
+      </header>
+
+      <main class="game-shell">
+        <section class="viewport-wrap" aria-label="3D 原石观察区">
+          <div id="scene"></div>
+          <div class="scene-vignette"></div>
+          <div class="reticle" aria-hidden="true"><i></i><span></span></div>
+          <div class="scene-tag"><span class="pulse-dot"></span><span id="sceneState">原石扫描就绪</span></div>
+          <div class="cut-progress" id="cutProgress" aria-hidden="true">
+            <span>砂轮进给</span><div><i id="cutProgressBar"></i></div><b id="cutProgressText">0%</b>
+          </div>
+
+          <aside class="panel info-panel ornamental">
+            <div class="panel-heading">
+              <div><span class="panel-index">壹</span><p>原石档案</p></div>
+              <span class="online">已入库</span>
+            </div>
+            <dl class="stone-stats">
+              <div><dt>编号</dt><dd id="stoneId">MZ-0713</dd></div>
+              <div><dt>场口</dt><dd id="origin">莫西沙</dd></div>
+              <div><dt>重量</dt><dd><span id="weight">18.6</span> kg</dd></div>
+              <div><dt>皮壳</dt><dd id="skin">黑乌砂 · 紧</dd></div>
+              <div><dt>购入价</dt><dd class="gold" id="cost">¥12,800</dd></div>
+            </dl>
+            <div class="divider"><span>风险情报</span></div>
+            <div class="risk-list">
+              <div><span>裂纹迹象</span><b id="riskCrack" class="warn">中</b></div>
+              <div><span>雾层厚度</span><b id="riskFog">未知</b></div>
+              <div><span>出绿概率</span><b id="greenChance" class="jade">37%</b></div>
+            </div>
+            <p class="inspector-note" id="inspectorNote">皮壳老辣，局部有松花。灯下表现含蓄，值得一刀。</p>
+          </aside>
+
+          <aside class="panel control-panel ornamental">
+            <div class="panel-heading">
+              <div><span class="panel-index">贰</span><p>切割机控制</p></div>
+              <span class="machine-id">GX–04</span>
+            </div>
+
+            <div class="control-block">
+              <div class="control-title"><span>切割角度</span><output id="angleOutput">18°</output></div>
+              <div class="dial-wrap">
+                <div class="dial-marks"></div>
+                <div class="dial" id="dial"><i id="dialNeedle"></i><span></span></div>
+                <div class="dial-labels"><span>−40</span><span>0</span><span>40</span></div>
+              </div>
+              <input id="angle" class="native-range" type="range" min="-40" max="40" value="18" step="1" aria-label="切割角度" />
+              <div class="micro-buttons"><button id="angleMinus" aria-label="角度减一">−</button><span>步进 1°</span><button id="anglePlus" aria-label="角度加一">＋</button></div>
+            </div>
+
+            <div class="control-block depth-block">
+              <div class="control-title"><span>下刀深度</span><output id="depthOutput">46%</output></div>
+              <div class="track-shell"><div class="track-fill" id="depthFill"></div><i id="depthThumb"></i></div>
+              <input id="depth" class="depth-input" type="range" min="18" max="82" value="46" step="1" aria-label="下刀深度" />
+              <div class="scale"><span>浅切</span><span>中心</span><span>深切</span></div>
+            </div>
+
+            <div class="estimate-strip">
+              <span>预计损耗</span><strong id="lossEstimate">9.2%</strong><i></i><small>切面面积 <b id="faceEstimate">68%</b></small>
+            </div>
+
+            <button class="cut-button" id="cutButton"><span class="button-glyph">⌁</span><span>开始切割<small>启动金刚砂轮</small></span><i>››</i></button>
+            <button class="secondary-button" id="newStoneButton">换一块原石</button>
+          </aside>
+
+          <div class="result-card ornamental" id="resultCard" aria-live="polite">
+            <button class="result-close" id="resultClose" aria-label="收起估价">×</button>
+            <p class="eyebrow">CUTTING REPORT · 开石报告</p>
+            <div class="result-title"><span id="resultBadge">涨</span><div><h2 id="resultName">冰种阳绿</h2><p id="resultSummary">水头充足，色根集中，裂纹避开主料。</p></div></div>
+            <div class="result-grid">
+              <div><span>种水</span><b id="resultWater">冰种</b></div>
+              <div><span>颜色</span><b id="resultColor">阳绿</b></div>
+              <div><span>裂纹</span><b id="resultCrack">少</b></div>
+              <div><span>估值</span><b class="gold" id="resultPrice">¥68,000</b></div>
+            </div>
+            <button id="sellButton" class="sell-button">按估价出售</button>
+          </div>
+        </section>
+      </main>
+
+      <footer class="command-bar">
+        <div class="tips">
+          <span><i class="mouse-icon"></i>拖拽旋转</span>
+          <span><i class="wheel-icon"></i>滚轮缩放</span>
+          <span><kbd>Shift</kbd> 精细观察</span>
+        </div>
+        <div class="machine-status"><span>砂轮温度</span><i></i><b id="temperature">24°C</b></div>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

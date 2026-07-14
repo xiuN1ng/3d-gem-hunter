@@ -1,15 +1,58 @@
-# 宝石猎人 3D Gem Hunter
+# 宝石猎人 · 3D 开石原型
 
-Three.js 3D 开石游戏 MVP，面向 GitHub Pages：<https://xiun1ng.github.io/3d-gem-hunter/>。
+[![Build](https://github.com/xiuN1ng/3d-gem-hunter/actions/workflows/ci.yml/badge.svg)](https://github.com/xiuN1ng/3d-gem-hunter/actions/workflows/ci.yml)
+[![Deploy](https://github.com/xiuN1ng/3d-gem-hunter/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/xiuN1ng/3d-gem-hunter/actions/workflows/deploy-pages.yml)
 
-## 本地开发
+基于 Three.js 与 Vite 的 3D 开石游戏 MVP。玩家可以观察程序化原石、调整切割角度与深度，切开后根据种水、颜色、棉和裂纹进行估价与交易。
+
+## 在线试玩
+
+GitHub Pages 启用后访问：
+
+<https://xiun1ng.github.io/3d-gem-hunter/>
+
+## 已实现
+
+- 程序化生成原石外形、皮壳与隐藏品质
+- 鼠标旋转、滚轮缩放、Shift 精细观察
+- 可调切割角度、深度和实时切面预览
+- 双裁剪半体开石动画、砂轮进度、粒子与音效
+- 切面轮廓与皮壳共享确定性表面函数，避免切面错位或悬空
+- 内部翡翠层、切面辉光与开石完成后的镜头聚焦
+- 程序化玉肉：种水、颜色、棉和裂纹
+- 切涨/切垮、估价、出售与换石循环
+- 东方神秘感与工业机械控制台组合界面
+
+## 本地运行
+
+需要 Node.js LTS：
 
 ```bash
 npm ci
 npm run dev
-npm run build
 ```
 
-## 玩法
+生产构建：
 
-观察程序化原石，调整切割角度与深度，启动 3.5 秒切割流程，查看翡翠切面报告，并通过出售或换石推进资金与天数循环。
+```bash
+npm run build
+npm run preview
+```
+
+## 自动发布
+
+- Pull Request 和非 `main` 分支只执行生产构建验证。
+- 推送到 `main` 后，GitHub Actions 自动构建并发布 `dist` 到 GitHub Pages。
+- 工作流采用最小权限；构建不需要第三方 API Key。
+
+首次使用时，在仓库的 **Settings → Pages → Build and deployment → Source** 中选择 **GitHub Actions**。
+
+## 技术策略
+
+当前版本以程序化变形网格作为原石外壳。切割时复用同一网格，通过互补裁剪平面形成两个半体；切面边界通过同一确定性表面函数逐方向求交，因此能贴合不规则皮壳，并在内部叠加程序化翡翠层。这一方案比高分辨率体素更适合 Web MVP。
+
+后续计划将内部数据升级为体素/SDF，并继续使用 Mesh、3D 材质场、Reveal Mask 与动态切面负责最终表现。
+
+## License
+
+[MIT](LICENSE)
