@@ -8,7 +8,9 @@ import { mulberry32, fbm, valueNoise, hash3 } from './noise.js';
  * - Outer shell continues to use the existing deformed mesh.
  * - Internal properties (water, color, cotton, crack) are queried via SDF-style sampling.
  *
- * This class is the foundation of Phase 1 visual upgrade.
+ * Performance notes (Phase 1.1 hotfix):
+ * - sample() reuses vectors and uses fewer octaves
+ * - generateCutTexture caches results and supports a fast low-res path
  */
 export class JadeVolume {
   /**
@@ -20,6 +22,10 @@ export class JadeVolume {
     this.profile = profile;
     this.seed = profile.seed;
     this.bounds = options.bounds ?? 2.6;
+
+    // Texture cache: key -> THREE.CanvasTexture
+    this._texCache = new Map();
+    this._maxCache = 6;
 
     // Pre-generate a few stable random helpers for this stone
     const rng = mulberry32(this.seed + 9173);
@@ -56,24 +62,30 @@ export class JadeVolume {
         width: 0.012 + rng() * 0.035
       });
     }
+
+    // Reusable vectors for sample() hot path
+    this._tmp = new THREE.Vector3();
+    this._tmp2 = new THREE.Vector3();
   }
 
   /**
-   * Sample volume properties at a world/local position.
+   * Sample volume properties at a local position.
+   * Optimized: no allocations in the common path.
    * @param {THREE.Vector3} position
+   * @param {boolean} [fast=false]  fewer noise octaves for preview
    * @returns {{ density: number, water: number, color: number, cotton: number, crack: number }}
    */
-  sample(position) {
+  sample(position, fast = false) {
     const x = position.x;
     const y = position.y;
     const z = position.z;
     const seed = this.seed;
     const p = this.profile;
+    const oct = fast ? 2 : 3;
 
-    // --- Base density (inside the approximate rock shape) ---
-    // We use a soft sphere deformed by low-frequency noise to roughly match the shell.
+    // --- Base density (soft deformed sphere) ---
     const r = Math.sqrt(x * x + y * y + z * z);
-    const n = fbm(x * 0.9, y * 0.9, z * 0.9, seed + 11, 4);
+    const n = fbm(x * 0.9, y * 0.9, z * 0.9, seed + 11, oct);
     const surface = 1.75 + n * 0.55;
     const density = THREE.MathUtils.smoothstep(surface + 0.18, surface - 0.25, r);
 
@@ -81,39 +93,47 @@ export class JadeVolume {
       return { density: 0, water: 0, color: 0, cotton: 0, crack: 0 };
     }
 
-    // --- Water (种水) – higher near center, modulated by noise ---
+    // --- Water ---
     const radial = 1 - THREE.MathUtils.clamp(r / 2.1, 0, 1);
-    const waterNoise = fbm(x * 1.4, y * 1.4, z * 1.4, seed + 41, 4);
+    const waterNoise = fbm(x * 1.4, y * 1.4, z * 1.4, seed + 41, oct);
     let water = p.water * (0.55 + radial * 0.45) * (0.7 + waterNoise * 0.55);
     water = THREE.MathUtils.clamp(water, 0, 1);
 
     // --- Color – concentrated around color roots ---
-    let color = p.color * 0.25; // base tint
-    for (const root of this.colorRoots) {
-      const d = position.distanceTo(root.center);
-      const influence = Math.exp(-(d * d) / (root.radius * root.radius)) * root.strength;
+    let color = p.color * 0.25;
+    for (let i = 0; i < this.colorRoots.length; i++) {
+      const root = this.colorRoots[i];
+      const dx = x - root.center.x;
+      const dy = y - root.center.y;
+      const dz = z - root.center.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      const invR2 = 1 / (root.radius * root.radius);
+      const influence = Math.exp(-d2 * invR2) * root.strength;
       color += influence * p.color;
     }
-    const colorNoise = fbm(x * 2.1, y * 2.1, z * 2.1, seed + 77, 3);
+    const colorNoise = fbm(x * 2.1, y * 2.1, z * 2.1, seed + 77, fast ? 2 : 3);
     color = THREE.MathUtils.clamp(color * (0.75 + colorNoise * 0.4), 0, 1);
 
-    // --- Cotton (棉) – mid/high frequency ---
-    const cottonNoise = fbm(x * 3.8, y * 3.8, z * 3.8, seed + 103, 4);
+    // --- Cotton ---
+    const cottonNoise = fbm(x * 3.8, y * 3.8, z * 3.8, seed + 103, oct);
     let cotton = p.cotton * (0.35 + cottonNoise * 0.9);
     cotton = THREE.MathUtils.clamp(cotton, 0, 1);
 
-    // --- Crack – distance to nearest crack segment ---
+    // --- Crack (no allocations) ---
     let crack = 0;
-    for (const c of this.cracks) {
-      const toPoint = position.clone().sub(c.origin);
-      const t = THREE.MathUtils.clamp(toPoint.dot(c.dir), 0, c.length);
-      const closest = c.origin.clone().addScaledVector(c.dir, t);
-      const dist = position.distanceTo(closest);
-      const influence = Math.exp(-(dist * dist) / (c.width * c.width * 4));
-      crack = Math.max(crack, influence);
+    const tmp = this._tmp;
+    const tmp2 = this._tmp2;
+    for (let i = 0; i < this.cracks.length; i++) {
+      const c = this.cracks[i];
+      tmp.copy(position).sub(c.origin);
+      const t = THREE.MathUtils.clamp(tmp.dot(c.dir), 0, c.length);
+      tmp2.copy(c.origin).addScaledVector(c.dir, t);
+      const dist = position.distanceTo(tmp2);
+      const w2 = c.width * c.width * 4;
+      const influence = Math.exp(-(dist * dist) / w2);
+      if (influence > crack) crack = influence;
     }
-    crack *= p.crack; // scale by overall crack risk
-    crack = THREE.MathUtils.clamp(crack, 0, 1);
+    crack = THREE.MathUtils.clamp(crack * p.crack, 0, 1);
 
     return { density, water, color, cotton, crack };
   }
@@ -123,37 +143,51 @@ export class JadeVolume {
    * @param {THREE.Vector3} normal
    * @param {THREE.Vector3} center
    * @param {number} [size=512]
-   * @param {number} [extent=2.4]  world-space half-size of the sampling square
+   * @param {number} [extent=2.4]
+   * @param {object} [opts]
+   * @param {boolean} [opts.fast=false]  use fewer octaves (for preview)
    * @returns {THREE.CanvasTexture}
    */
-  generateCutTexture(normal, center, size = 512, extent = 2.4) {
+  generateCutTexture(normal, center, size = 512, extent = 2.4, opts = {}) {
+    const fast = opts.fast === true;
+    const key = [
+      size,
+      fast ? 1 : 0,
+      normal.x.toFixed(3), normal.y.toFixed(3), normal.z.toFixed(3),
+      center.x.toFixed(3), center.y.toFixed(3), center.z.toFixed(3)
+    ].join('|');
+
+    if (this._texCache.has(key)) {
+      return this._texCache.get(key);
+    }
+
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: false });
     const img = ctx.createImageData(size, size);
 
-    // Build orthonormal basis on the cut plane
+    // Orthonormal basis on the cut plane
     const n = normal.clone().normalize();
     let up = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
     const tangent = new THREE.Vector3().crossVectors(up, n).normalize();
     const bitangent = new THREE.Vector3().crossVectors(n, tangent).normalize();
 
     const pos = new THREE.Vector3();
+    const invSize = 1 / (size - 1);
 
     for (let j = 0; j < size; j++) {
+      const v = (j * invSize - 0.5) * 2 * extent;
       for (let i = 0; i < size; i++) {
-        const u = (i / (size - 1) - 0.5) * 2 * extent;
-        const v = (j / (size - 1) - 0.5) * 2 * extent;
+        const u = (i * invSize - 0.5) * 2 * extent;
 
         pos.copy(center)
           .addScaledVector(tangent, u)
           .addScaledVector(bitangent, v);
 
-        const s = this.sample(pos);
+        const s = this.sample(pos, fast);
         const idx = (j * size + i) * 4;
 
         if (s.density < 0.05) {
-          // Outside – transparent / dark
           img.data[idx] = 8;
           img.data[idx + 1] = 14;
           img.data[idx + 2] = 12;
@@ -161,22 +195,17 @@ export class JadeVolume {
           continue;
         }
 
-        // Base jade color driven by water + color
         const hue = 145 + s.color * 28;
         const sat = 55 + s.color * 30;
         const light = 14 + s.water * 38 - s.cotton * 12;
-
-        // Simple HSL → RGB (lightweight)
         const rgb = hslToRgb(hue / 360, sat / 100, light / 100);
 
-        // Darken by crack
         const crackDark = 1 - s.crack * 0.72;
         img.data[idx] = Math.round(rgb.r * 255 * crackDark);
         img.data[idx + 1] = Math.round(rgb.g * 255 * crackDark);
         img.data[idx + 2] = Math.round(rgb.b * 255 * crackDark);
         img.data[idx + 3] = Math.round(220 + s.water * 35);
 
-        // Add subtle cotton veil
         if (s.cotton > 0.35) {
           const veil = (s.cotton - 0.35) * 0.45;
           img.data[idx] = Math.min(255, img.data[idx] + veil * 40);
@@ -188,13 +217,25 @@ export class JadeVolume {
 
     ctx.putImageData(img, 0, 0);
 
-    // Optional: draw soft crack lines for extra clarity
-    this._drawCrackLines(ctx, size, extent, tangent, bitangent, center, n);
+    // Crack lines only for high-quality final texture
+    if (!fast) {
+      this._drawCrackLines(ctx, size, extent, tangent, bitangent, center, n);
+    }
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.needsUpdate = true;
+
+    // Simple LRU-ish cache
+    if (this._texCache.size >= this._maxCache) {
+      const firstKey = this._texCache.keys().next().value;
+      const old = this._texCache.get(firstKey);
+      old?.dispose?.();
+      this._texCache.delete(firstKey);
+    }
+    this._texCache.set(key, texture);
+
     return texture;
   }
 
@@ -202,11 +243,10 @@ export class JadeVolume {
   _drawCrackLines(ctx, size, extent, tangent, bitangent, center, normal) {
     ctx.globalCompositeOperation = 'source-over';
     for (const c of this.cracks) {
-      // Project crack segment onto the cut plane (approximate)
       const mid = c.origin.clone().addScaledVector(c.dir, c.length * 0.5);
       const toMid = mid.clone().sub(center);
       const distToPlane = toMid.dot(normal);
-      if (Math.abs(distToPlane) > 0.35) continue; // far from this cut
+      if (Math.abs(distToPlane) > 0.35) continue;
 
       const onPlane = mid.clone().addScaledVector(normal, -distToPlane);
       const local = onPlane.clone().sub(center);
@@ -225,6 +265,13 @@ export class JadeVolume {
       ctx.lineTo(px + 22, py + 14);
       ctx.stroke();
     }
+  }
+
+  dispose() {
+    for (const tex of this._texCache.values()) {
+      tex.dispose?.();
+    }
+    this._texCache.clear();
   }
 }
 
