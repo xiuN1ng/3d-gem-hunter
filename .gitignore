@@ -1,5 +1,7 @@
 node_modules/
 dist/
-.DS_Store
-.env*
 .vite/
+*.local
+.DS_Store
+Thumbs.db
+npm-debug.log*
