@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
 import './style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -335,9 +336,7 @@ function pointInsideRock(point, seed, axisScale) {
   return unscaled.length() <= rockSurfaceRadius(unscaled.clone().normalize(), seed);
 }
 
-// Derive the cut contour from the exact same deterministic surface used by the
-// stone mesh. This keeps the jade face flush with every bump in the crust.
-function createCutShape(normal, center, seed, sampleCount = 112) {
+function createAnalyticalCutShape(normal, center, seed, sampleCount = 112) {
   const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
   const axisScale = rockAxisScale(seed);
   const points = [];
@@ -359,6 +358,24 @@ function createCutShape(normal, center, seed, sampleCount = 112) {
   }
 
   return { shape: new THREE.Shape(points), points, quaternion, radius };
+}
+
+function createCutShape(geometry, normal, center, seed) {
+  const cacheKey = [...normal.toArray(), ...center.toArray()].map((value) => value.toFixed(6)).join(':');
+  if (geometry.userData.cutShapeCache?.key === cacheKey) return geometry.userData.cutShapeCache.result;
+  const intersection = intersectGeometryWithPlane(geometry, normal, center);
+  if (!intersection) {
+    const fallback = createAnalyticalCutShape(normal, center, seed);
+    geometry.userData.cutShapeCache = { key: cacheKey, result: fallback };
+    return fallback;
+  }
+  const result = { ...intersection, shape: new THREE.Shape(intersection.points) };
+  geometry.userData.cutShapeCache = { key: cacheKey, result };
+  return result;
+}
+
+function setWorldClippingPlane(target, localNormal, localPoint) {
+  return setWorldPlaneFromLocal(target, localNormal, localPoint, stoneRoot);
 }
 
 function cutNormal(angle) {
@@ -416,7 +433,7 @@ function buildPreviewPlane() {
   previewGroup = new THREE.Group();
   const normal = cutNormal(state.angle);
   const position = cutPosition(state.angle, state.depth);
-  const { shape, points, quaternion, radius } = createCutShape(normal, position, state.stone.seed);
+  const { shape, points, quaternion, radius } = createCutShape(wholeRock.geometry, normal, position, state.stone.seed);
   const planeGeometry = new THREE.ShapeGeometry(shape);
   const planeMat = new THREE.MeshBasicMaterial({ color: 0x50edc2, transparent: true, opacity: .055, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
   const plane = new THREE.Mesh(planeGeometry, planeMat);
@@ -531,9 +548,9 @@ function buildHalves() {
   const group = new THREE.Group();
   const normal = cutNormal(state.angle);
   const position = cutPosition(state.angle, state.depth);
-  const planeA = new THREE.Plane(normal.clone(), -normal.dot(position));
+  const planeA = setWorldClippingPlane(new THREE.Plane(), normal, position);
   const planeBNormal = normal.clone().negate();
-  const planeB = new THREE.Plane(planeBNormal, -planeBNormal.dot(position));
+  const planeB = setWorldClippingPlane(new THREE.Plane(), planeBNormal, position);
 
   const geometry = wholeRock.geometry;
   const rockA = new THREE.Mesh(geometry, createRockMaterial(state.stone, [planeA]));
@@ -541,7 +558,7 @@ function buildHalves() {
   rockA.castShadow = rockB.castShadow = true;
   rockA.receiveShadow = rockB.receiveShadow = true;
 
-  const { shape, points, quaternion, radius } = createCutShape(normal, position, state.stone.seed);
+  const { shape, points, quaternion, radius } = createCutShape(geometry, normal, position, state.stone.seed);
   const faceGeo = new THREE.ShapeGeometry(shape);
   const jadeTexture = makeJadeTexture(state.stone);
   const faceMaterialA = createJadeMaterial(state.stone, jadeTexture);
@@ -831,9 +848,8 @@ function animateCut(delta) {
     halves.halfB.position.copy(halves.normal).multiplyScalar(-open);
     const posA = halves.position.clone().addScaledVector(halves.normal, open);
     const posB = halves.position.clone().addScaledVector(halves.normal, -open);
-    halves.planeA.constant = -halves.normal.dot(posA);
-    const bn = halves.normal.clone().negate();
-    halves.planeB.constant = -bn.dot(posB);
+    setWorldClippingPlane(halves.planeA, halves.normal, posA);
+    setWorldClippingPlane(halves.planeB, halves.normal.clone().negate(), posB);
     const reveal = THREE.MathUtils.smoothstep(p, .72, .94);
     halves.faceA.material.emissiveIntensity = (.5 + state.stone.water * .7) * (1 + reveal * .42);
     halves.faceB.material.emissiveIntensity = halves.faceA.material.emissiveIntensity;
