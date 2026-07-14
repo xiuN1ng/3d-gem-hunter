@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { JadeVolume } from './volume/JadeVolume.js';
 import './style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -253,6 +254,7 @@ function makeRockGeometry(seed) {
   return geometry;
 }
 
+// Legacy 2D texture generator – kept temporarily for comparison / fallback
 function makeJadeTexture(profile) {
   const random = mulberry32(profile.seed + 808);
   const canvas = document.createElement('canvas');
@@ -395,6 +397,7 @@ let previewGroup = null;
 let halves = null;
 let cuttingFX = null;
 let cameraTween = null;
+let currentVolume = null; // Phase 1: internal jade volume
 
 function disposeObject(object) {
   object.traverse((child) => {
@@ -560,7 +563,12 @@ function buildHalves() {
 
   const { shape, points, quaternion, radius } = createCutShape(geometry, normal, position, state.stone.seed);
   const faceGeo = new THREE.ShapeGeometry(shape);
-  const jadeTexture = makeJadeTexture(state.stone);
+
+  // Phase 1: use volumetric sampling for cut face texture
+  const jadeTexture = currentVolume
+    ? currentVolume.generateCutTexture(normal, position, 512)
+    : makeJadeTexture(state.stone);
+
   const faceMaterialA = createJadeMaterial(state.stone, jadeTexture);
   const faceMaterialB = createJadeMaterial(state.stone, jadeTexture.clone());
   const capA = createFaceAssembly(faceGeo, faceMaterialA, points, quaternion, position);
@@ -605,6 +613,9 @@ function buildStone(profile) {
   stoneRoot = new THREE.Group();
   stoneRoot.position.y = .24;
   scene.add(stoneRoot);
+
+  // Phase 1: create internal volume for this stone
+  currentVolume = new JadeVolume(profile);
 
   const geometry = makeRockGeometry(profile.seed);
   wholeRock = new THREE.Mesh(geometry, createRockMaterial(profile));
