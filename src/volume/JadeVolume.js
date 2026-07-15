@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mulberry32, fbm, valueNoise, hash3 } from './noise.js';
+import { cellularNoise, domainWarp3, fbm, gradientFbm, mulberry32, ridgedFbm } from './noise.js';
 
 /**
  * JadeVolume – procedural internal volume representation for jade.
@@ -66,8 +66,9 @@ export class JadeVolume {
     // Reusable vectors for sample() hot path
     this._tmp = new THREE.Vector3();
     this._tmp2 = new THREE.Vector3();
-    this._sampleResult = { density: 0, water: 0, color: 0, cotton: 0, crack: 0 };
+    this._sampleResult = { density: 0, water: 0, color: 0, cotton: 0, crack: 0, cloud: 0, vein: 0, mineral: 0, grain: 0 };
     this._rgbResult = { r: 0, g: 0, b: 0 };
+    this._warpResult = { x: 0, y: 0, z: 0 };
   }
 
   /**
@@ -78,7 +79,7 @@ export class JadeVolume {
    * @returns {{ density: number, water: number, color: number, cotton: number, crack: number }}
    */
   sample(position, fast = false, target = null) {
-    const result = target ?? { density: 0, water: 0, color: 0, cotton: 0, crack: 0 };
+    const result = target ?? { density: 0, water: 0, color: 0, cotton: 0, crack: 0, cloud: 0, vein: 0, mineral: 0, grain: 0 };
     const x = position.x;
     const y = position.y;
     const z = position.z;
@@ -90,17 +91,26 @@ export class JadeVolume {
     const r = Math.sqrt(x * x + y * y + z * z);
     const n = fbm(x * 0.9, y * 0.9, z * 0.9, seed + 11, oct);
     const surface = 1.75 + n * 0.55;
-    const density = THREE.MathUtils.smoothstep(surface + 0.18, surface - 0.25, r);
+    const density = 1 - THREE.MathUtils.smoothstep(r, surface - 0.25, surface + 0.18);
 
     if (density < 0.01) {
       result.density = result.water = result.color = result.cotton = result.crack = 0;
+      result.cloud = result.vein = result.mineral = result.grain = 0;
       return result;
     }
 
+    // A shared, continuous 3D warped domain keeps both cut halves registered.
+    const warp = domainWarp3(x * .72, y * .72, z * .72, seed + 211, .7, fast ? 1 : 2, this._warpResult);
+    const cloud = gradientFbm(warp.x * .78, warp.y * .78, warp.z * .78, seed + 227, fast ? 2 : 3);
+    const grain = gradientFbm(warp.x * 5.6, warp.y * 5.6, warp.z * 5.6, seed + 263, 2);
+    const ridge = ridgedFbm(warp.x * 1.7, warp.y * 1.2, warp.z * 2.1, seed + 311, fast ? 2 : 3);
+    const vein = Math.pow(THREE.MathUtils.clamp((ridge - .58) / .42, 0, 1), 2.4);
+    const mineralDistance = cellularNoise(warp.x * 1.35, warp.y * 1.35, warp.z * 1.35, seed + 349);
+    const mineral = 1 - THREE.MathUtils.smoothstep(mineralDistance, .18, .72);
+
     // --- Water ---
     const radial = 1 - THREE.MathUtils.clamp(r / 2.1, 0, 1);
-    const waterNoise = fbm(x * 1.4, y * 1.4, z * 1.4, seed + 41, oct);
-    let water = p.water * (0.55 + radial * 0.45) * (0.7 + waterNoise * 0.55);
+    let water = p.water * (0.55 + radial * 0.45) * (0.72 + cloud * 0.5 + mineral * .09);
     water = THREE.MathUtils.clamp(water, 0, 1);
 
     // --- Color – concentrated around color roots ---
@@ -115,12 +125,11 @@ export class JadeVolume {
       const influence = Math.exp(-d2 * invR2) * root.strength;
       color += influence * p.color;
     }
-    const colorNoise = fbm(x * 2.1, y * 2.1, z * 2.1, seed + 77, fast ? 2 : 3);
-    color = THREE.MathUtils.clamp(color * (0.75 + colorNoise * 0.4), 0, 1);
+    color = THREE.MathUtils.clamp(color * (0.69 + cloud * .48 + vein * .18), 0, 1);
 
     // --- Cotton ---
-    const cottonNoise = fbm(x * 3.8, y * 3.8, z * 3.8, seed + 103, oct);
-    let cotton = p.cotton * (0.35 + cottonNoise * 0.9);
+    const cottonNoise = gradientFbm(warp.x * 2.7, warp.y * 2.7, warp.z * 2.7, seed + 383, fast ? 2 : 3);
+    let cotton = p.cotton * (.18 + cottonNoise * .72 + vein * .36);
     cotton = THREE.MathUtils.clamp(cotton, 0, 1);
 
     // --- Crack (no allocations) ---
@@ -144,6 +153,10 @@ export class JadeVolume {
     result.color = color;
     result.cotton = cotton;
     result.crack = crack;
+    result.cloud = cloud;
+    result.vein = vein;
+    result.mineral = mineral;
+    result.grain = grain;
     return result;
   }
 
@@ -179,18 +192,21 @@ export class JadeVolume {
           continue;
         }
 
-        const hue = 145 + sample.color * 28;
-        const sat = 55 + sample.color * 30;
-        const light = 14 + sample.water * 38 - sample.cotton * 12;
+        const hue = 143 + sample.color * 26 + (sample.cloud - .5) * 7;
+        const sat = 48 + sample.color * 34 - sample.cotton * 10;
+        const crystalLift = sample.mineral * (3 + sample.water * 7);
+        const microGrain = (sample.grain - .5) * 7;
+        const veinLift = sample.vein * (sample.cotton * 15 + 4);
+        const light = 17 + sample.water * 35 + (sample.cloud - .5) * 12 + crystalLift + microGrain + veinLift - sample.cotton * 8;
         hslToRgb(hue / 360, sat / 100, light / 100, rgb);
         const crackDark = 1 - sample.crack * 0.72;
         data[idx] = Math.round(rgb.r * 255 * crackDark);
         data[idx + 1] = Math.round(rgb.g * 255 * crackDark);
         data[idx + 2] = Math.round(rgb.b * 255 * crackDark);
-        data[idx + 3] = Math.round(220 + sample.water * 35);
+        data[idx + 3] = 255;
 
         if (sample.cotton > 0.35) {
-          const veil = (sample.cotton - 0.35) * 0.45;
+          const veil = (sample.cotton - 0.35) * 0.38;
           data[idx] = Math.min(255, data[idx] + veil * 40);
           data[idx + 1] = Math.min(255, data[idx + 1] + veil * 55);
           data[idx + 2] = Math.min(255, data[idx + 2] + veil * 35);
