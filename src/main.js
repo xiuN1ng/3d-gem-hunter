@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import './style.css';
@@ -920,14 +920,20 @@ async function startCut() {
 
 function focusCutSurface() {
   if (!halves || !stoneRoot) return;
-  const localFocus = halves.position.clone().addScaledVector(halves.normal, state.split);
+  const localFocus = halves.position.clone();
+  if (mobileQuality) localFocus.add(halves.halfA.position);
   const worldFocus = stoneRoot.localToWorld(localFocus);
-  const worldNormal = halves.normal.clone().applyQuaternion(stoneRoot.getWorldQuaternion(new THREE.Quaternion())).normalize();
-  const side = new THREE.Vector3().crossVectors(worldNormal, camera.up).normalize().multiplyScalar(.85);
-  const destination = worldFocus.clone()
-    .addScaledVector(worldNormal, 5.1)
-    .add(side)
-    .add(new THREE.Vector3(0, .65, 0));
+  const worldRotation = stoneRoot.getWorldQuaternion(new THREE.Quaternion());
+  const worldNormal = halves.normal.clone().applyQuaternion(worldRotation).normalize();
+  const worldTangent = halves.presentationTangent.clone().applyQuaternion(worldRotation).normalize();
+  const framingTarget = worldFocus.clone().add(new THREE.Vector3(0, mobileQuality ? -.72 : -.48, 0));
+  const distance = mobileQuality
+    ? Math.max(7.2, halves.radius * 3.65)
+    : Math.max(7.6, halves.radius * 4.15);
+  const destination = framingTarget.clone()
+    .addScaledVector(worldNormal, distance)
+    .addScaledVector(worldTangent, mobileQuality ? 0 : .16)
+    .add(new THREE.Vector3(0, .12, 0));
 
   cameraTween = {
     startedAt: performance.now(),
@@ -935,7 +941,7 @@ function focusCutSurface() {
     fromPosition: camera.position.clone(),
     fromTarget: controls.target.clone(),
     toPosition: destination,
-    toTarget: worldFocus
+    toTarget: framingTarget
   };
 }
 
@@ -961,7 +967,7 @@ function showResult() {
   ui.resultPrice.textContent = formatMoney(result.price);
   ui.resultCard.classList.add('visible');
   ui.sellButton.textContent = `按 ${formatMoney(result.price)} 出售`;
-  ui.sceneState.textContent = `开石完成 · ${result.badge}`;
+  ui.sceneState.textContent = `双面鉴赏 · ${result.badge} · 可拖拽观察`;
 }
 
 function sellStone() {
@@ -1018,12 +1024,21 @@ function animateCut(time) {
   if (p > .72) {
     wholeRock.visible = false;
     halves.group.visible = true;
-    const open = THREE.MathUtils.smoothstep(p, .72, 1) * .62;
-    state.split = open;
-    halves.halfA.position.copy(halves.normal).multiplyScalar(open);
-    halves.halfB.position.copy(halves.normal).multiplyScalar(-open);
-    const posA = halves.position.clone().addScaledVector(halves.normal, open);
-    const posB = halves.position.clone().addScaledVector(halves.normal, -open);
+    const axialProgress = THREE.MathUtils.smoothstep(p, .72, .94);
+    const displayProgress = THREE.MathUtils.smoothstep(p, .84, 1);
+    const presentation = computeCutPresentation(
+      halves.normal,
+      halves.radius,
+      axialProgress,
+      displayProgress,
+      mobileQuality
+    );
+    state.split = presentation.axialDistance;
+    halves.presentationTangent = presentation.tangent;
+    halves.halfA.position.copy(presentation.halfA);
+    halves.halfB.position.copy(presentation.halfB);
+    const posA = halves.position.clone().addScaledVector(halves.normal, presentation.axialDistance);
+    const posB = halves.position.clone().addScaledVector(halves.normal, -presentation.axialDistance);
     setWorldClippingPlane(halves.planeA, halves.normal, posA);
     setWorldClippingPlane(halves.planeB, halves.normal.clone().negate(), posB);
     const reveal = THREE.MathUtils.smoothstep(p, .72, .94);
