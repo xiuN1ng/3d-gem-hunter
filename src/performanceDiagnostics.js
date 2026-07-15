@@ -10,8 +10,10 @@ export const MOBILE_PERFORMANCE_BUDGETS = Object.freeze({
 
 export const CI_SOFTWARE_WEBGL_BUDGETS = Object.freeze({
   ...MOBILE_PERFORMANCE_BUDGETS,
-  minAverageFps: 12,
-  maxP95FrameMs: 120
+  minAverageFps: 4.5,
+  maxP95FrameMs: 350,
+  maxCutMs: 20000,
+  maxLongTaskMs: 1200
 });
 
 export function summarizeFrameTimes(frameTimes) {

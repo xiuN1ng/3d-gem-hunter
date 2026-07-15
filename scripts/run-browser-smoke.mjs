@@ -70,6 +70,15 @@ async function connectCdp(webSocketDebuggerUrl) {
   };
 }
 
+async function stopProcess(process) {
+  if (!process || process.exitCode !== null) return;
+  await new Promise((resolve) => {
+    process.once('exit', resolve);
+    process.kill('SIGTERM');
+    setTimeout(resolve, 2000);
+  });
+}
+
 try {
   await waitFor(async () => {
     try {
@@ -127,7 +136,7 @@ try {
   }
   console.log('PASS mobile WebGL browser smoke test');
 } finally {
-  chrome?.kill('SIGTERM');
-  preview.kill('SIGTERM');
-  await rm(profileDirectory, { recursive: true, force: true });
+  await stopProcess(chrome);
+  await stopProcess(preview);
+  await rm(profileDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

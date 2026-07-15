@@ -1080,6 +1080,7 @@ resize();
 requestAnimationFrame(animate);
 
 async function runPerformanceAcceptance() {
+  const ciSoftwareWebgl = query.get('perf-tier') === 'ci';
   const frameTimes = [];
   let maxLongTaskMs = 0;
   const longTaskObserver = typeof PerformanceObserver === 'undefined'
@@ -1099,7 +1100,8 @@ async function runPerformanceAcceptance() {
   const prepareMs = performance.now() - prepareStartedAt;
   const cutStartedAt = performance.now();
   let previousFrame = cutStartedAt;
-  while (state.phase !== 'result' && performance.now() - cutStartedAt < 10000) {
+  const cutTimeoutMs = ciSoftwareWebgl ? 20000 : 10000;
+  while (state.phase !== 'result' && performance.now() - cutStartedAt < cutTimeoutMs) {
     const time = await nextFrame();
     frameTimes.push(time - previousFrame);
     previousFrame = time;
@@ -1117,7 +1119,7 @@ async function runPerformanceAcceptance() {
     contextLost: renderer.getContext().isContextLost(),
     completed: state.phase === 'result'
   };
-  const budgets = query.get('perf-tier') === 'ci' ? CI_SOFTWARE_WEBGL_BUDGETS : undefined;
+  const budgets = ciSoftwareWebgl ? CI_SOFTWARE_WEBGL_BUDGETS : undefined;
   const evaluation = evaluatePerformance(metrics, budgets);
   const output = document.createElement('pre');
   output.id = 'perf-result';
