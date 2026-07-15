@@ -146,6 +146,13 @@ button { color: inherit; }
 .inspector-note { margin: 15px 2px 0; padding: 11px 10px; border-left: 2px solid var(--gold-dim); background: rgba(200,169,103,.035); color: #788a84; font: 400 10px/1.8 "Noto Serif SC", serif; letter-spacing: .05em; }
 
 .control-block { position: relative; padding: 13px 2px 9px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.tool-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+.tool-option { min-height: 47px; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 3px; border: 1px solid #263e35; background: linear-gradient(145deg, #0b1a15, #07100d); color: #7b9187; cursor: pointer; transition: .18s ease; }
+.tool-option:hover { border-color: #477e67; color: #c5ded3; transform: translateY(-1px); }
+.tool-option.active { border-color: var(--jade-dim); background: linear-gradient(145deg, #103b2e, #0b2019); color: #d5eee3; box-shadow: inset 0 0 14px rgba(66,226,177,.1), 0 0 10px rgba(66,226,177,.06); }
+.tool-option b { color: var(--gold); font-size: 16px; font-weight: 500; }
+.tool-option span { display: flex; flex-direction: column; align-items: start; font-size: 9px; letter-spacing: .04em; }
+.tool-option small { margin-top: 3px; color: #5c766b; font-size: 7px; letter-spacing: .03em; }
 .control-title { display: flex; align-items: center; justify-content: space-between; }
 .control-title > span { color: #81918b; font-size: 11px; letter-spacing: .1em; }
 .control-title output { font: 600 22px/1 "Noto Sans SC", sans-serif; color: var(--jade); text-shadow: 0 0 16px rgba(66,226,177,.23); }
