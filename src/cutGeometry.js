@@ -152,3 +152,15 @@ export function computeCutPresentation(normal, radius, axialProgress, displayPro
   }
   return { tangent, halfA, halfB, axialDistance, lateralDistance };
 }
+
+/** Rotate a cut surface around its own center so its outward normal faces the showroom camera. */
+export function computeFaceForwardTransform(surfaceNormal, pivot, translation, progress = 1, displayNormal = new THREE.Vector3(0, 0, 1)) {
+  const targetRotation = new THREE.Quaternion().setFromUnitVectors(
+    surfaceNormal.clone().normalize(),
+    displayNormal.clone().normalize()
+  );
+  const quaternion = new THREE.Quaternion().slerp(targetRotation, THREE.MathUtils.clamp(progress, 0, 1));
+  const rotatedPivot = pivot.clone().applyQuaternion(quaternion);
+  const position = translation.clone().add(pivot).sub(rotatedPivot);
+  return { quaternion, position };
+}
