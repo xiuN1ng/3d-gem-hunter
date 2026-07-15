@@ -45,6 +45,8 @@ npm run preview
 npm run validate
 ```
 
+浏览器性能诊断可通过 `?perf-test=1` 启动。它会以移动端画质自动完成一次切割，并记录平均 FPS、P95 帧耗时、切面准备时间、长任务和 GPU 资源数量；GitHub CI 会在 Chrome 的软件 WebGL 环境中运行对应的兼容性门槛。
+
 ## 自动发布
 
 - Pull Request 和非 `main` 分支只执行生产构建验证。

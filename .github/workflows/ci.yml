@@ -28,3 +28,6 @@ jobs:
 
       - name: Test and validate production bundle
         run: npm run validate
+
+      - name: Run mobile WebGL performance smoke test
+        run: npm run test:browser

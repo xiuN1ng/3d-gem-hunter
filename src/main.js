@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality } from './performancePolicy.js';
 import './style.css';
 
@@ -35,7 +36,9 @@ const state = {
   hasPaidCurrent: true
 };
 
-const mobileQuality = detectMobileQuality({
+const query = new URLSearchParams(window.location.search);
+const performanceTestMode = query.has('perf-test');
+const mobileQuality = performanceTestMode || detectMobileQuality({
   coarsePointer: window.matchMedia('(pointer: coarse)').matches,
   width: window.innerWidth,
   height: window.innerHeight,
@@ -1075,3 +1078,58 @@ buildStone(state.stone);
 updateControls();
 resize();
 requestAnimationFrame(animate);
+
+async function runPerformanceAcceptance() {
+  const frameTimes = [];
+  let maxLongTaskMs = 0;
+  const longTaskObserver = typeof PerformanceObserver === 'undefined'
+    ? null
+    : new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) maxLongTaskMs = Math.max(maxLongTaskMs, entry.duration);
+      });
+  try {
+    longTaskObserver?.observe({ type: 'longtask', buffered: true });
+  } catch { /* Long Task API is optional. */ }
+
+  const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  for (let i = 0; i < 30; i++) await nextFrame();
+
+  const prepareStartedAt = performance.now();
+  await startCut();
+  const prepareMs = performance.now() - prepareStartedAt;
+  const cutStartedAt = performance.now();
+  let previousFrame = cutStartedAt;
+  while (state.phase !== 'result' && performance.now() - cutStartedAt < 10000) {
+    const time = await nextFrame();
+    frameTimes.push(time - previousFrame);
+    previousFrame = time;
+  }
+
+  longTaskObserver?.disconnect();
+  const frameSummary = summarizeFrameTimes(frameTimes);
+  const metrics = {
+    ...frameSummary,
+    prepareMs,
+    cutMs: performance.now() - cutStartedAt,
+    maxLongTaskMs,
+    geometries: renderer.info.memory.geometries,
+    textures: renderer.info.memory.textures,
+    contextLost: renderer.getContext().isContextLost(),
+    completed: state.phase === 'result'
+  };
+  const budgets = query.get('perf-tier') === 'ci' ? CI_SOFTWARE_WEBGL_BUDGETS : undefined;
+  const evaluation = evaluatePerformance(metrics, budgets);
+  const output = document.createElement('pre');
+  output.id = 'perf-result';
+  output.hidden = true;
+  output.textContent = JSON.stringify({ metrics, evaluation });
+  document.body.appendChild(output);
+  document.documentElement.dataset.perfTest = evaluation.passed ? 'pass' : 'fail';
+  document.title = evaluation.passed ? 'PERF_PASS' : 'PERF_FAIL';
+}
+
+if (performanceTestMode) runPerformanceAcceptance().catch((error) => {
+  document.documentElement.dataset.perfTest = 'fail';
+  document.title = 'PERF_FAIL';
+  console.error(error);
+});

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "test": "node --test",
+    "test:browser": "node scripts/run-browser-smoke.mjs",
     "build": "vite build",
     "check:bundle": "node scripts/check-build-budget.mjs",
     "validate": "npm test && npm run build && npm run check:bundle",
