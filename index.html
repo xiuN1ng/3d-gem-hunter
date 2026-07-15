@@ -84,6 +84,16 @@
             </div>
 
             <button class="cut-button" id="cutButton"><span class="button-glyph">⌁</span><span>开始切割<small>启动金刚砂轮</small></span><i>››</i></button>
+            <div class="inspection-controls" id="inspectionControls">
+              <div class="inspection-heading"><span>手持鉴赏灯</span><b id="lightModeLabel">自由灯位</b></div>
+              <div class="light-pad" id="lightPad" role="slider" aria-label="鉴赏灯位置" aria-valuemin="0" aria-valuemax="100" tabindex="0">
+                <i class="light-puck" id="lightPuck"></i><span>拖动灯位</span>
+              </div>
+              <label class="inspection-range"><span>灯光强度 <output id="lightIntensityOutput">72%</output></span><input id="lightIntensity" type="range" min="10" max="100" value="72" /></label>
+              <label class="inspection-range"><span>透光表现 <output id="translucencyOutput">68%</output></span><input id="translucency" type="range" min="0" max="100" value="68" /></label>
+              <label class="inspection-range temperature-range"><span>灯光色温 <output id="temperatureOutput">5600K</output></span><input id="lightTemperature" type="range" min="3200" max="7200" value="5600" step="100" /></label>
+              <div class="inspection-actions"><button id="autoLightButton">自动巡光</button><button id="toggleReportButton">收起估价报告</button></div>
+            </div>
             <button class="secondary-button" id="newStoneButton">查看供货商货盘</button>
           </aside>
 

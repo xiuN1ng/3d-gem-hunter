@@ -11,6 +11,11 @@ import './style.css';
 const $ = (selector) => document.querySelector(selector);
 const sceneHost = $('#scene');
 const CUT_TEXTURE_EXTENT = 2.4;
+const INSPECTION_WARM = new THREE.Color(0xffb36b);
+const INSPECTION_NEUTRAL = new THREE.Color(0xfff3df);
+const INSPECTION_COOL = new THREE.Color(0xb8d8ff);
+const inspectionColorScratch = new THREE.Color();
+const inspectionBitangentScratch = new THREE.Vector3();
 
 const ui = {
   funds: $('#funds'), day: $('#day'), stoneId: $('#stoneId'), origin: $('#origin'), weight: $('#weight'),
@@ -24,6 +29,11 @@ const ui = {
   resultBadge: $('#resultBadge'), resultName: $('#resultName'), resultSummary: $('#resultSummary'),
   resultWater: $('#resultWater'), resultColor: $('#resultColor'), resultCrack: $('#resultCrack'),
   resultPrice: $('#resultPrice'), sellButton: $('#sellButton'), resultClose: $('#resultClose'),
+  controlPanel: $('.control-panel'), inspectionControls: $('#inspectionControls'), lightPad: $('#lightPad'),
+  lightPuck: $('#lightPuck'), lightIntensity: $('#lightIntensity'), lightIntensityOutput: $('#lightIntensityOutput'),
+  translucency: $('#translucency'), translucencyOutput: $('#translucencyOutput'),
+  lightTemperature: $('#lightTemperature'), temperatureOutput: $('#temperatureOutput'),
+  lightModeLabel: $('#lightModeLabel'), autoLightButton: $('#autoLightButton'), toggleReportButton: $('#toggleReportButton'),
   supplierOverlay: $('#supplierOverlay'), supplierGrid: $('#supplierGrid'), supplierClose: $('#supplierClose'),
   supplierDay: $('#supplierDay'), supplierFunds: $('#supplierFunds'), supplierHint: $('#supplierHint'),
   seasonOverlay: $('#seasonOverlay'), seasonBadge: $('#seasonBadge'), seasonTitle: $('#seasonTitle'),
@@ -44,7 +54,8 @@ const state = {
   lastTime: performance.now(),
   seasonSeed: 713,
   inventory: [],
-  stats: createSeasonStats()
+  stats: createSeasonStats(),
+  inspection: { x: .5, y: .5, intensity: .72, translucency: .68, temperature: 5600, auto: false }
 };
 
 const query = new URLSearchParams(window.location.search);
@@ -423,6 +434,7 @@ let halves = null;
 let cuttingFX = null;
 let cameraTween = null;
 let stoneResources = null;
+let inspectionLight = null;
 
 function disposeObject(object, options = {}) {
   const preserveGeometries = options.preserveGeometries ?? new Set();
@@ -534,14 +546,22 @@ function createCutFX(radius, normal, position) {
 }
 
 function createCutFaceMaterial(profile, texture) {
-  return new THREE.MeshStandardMaterial({
+  return new THREE.MeshPhysicalMaterial({
     color: new THREE.Color().setHSL(.38 + profile.color * .025, .2, .82),
     map: texture,
     emissive: new THREE.Color(0x003d29),
     emissiveMap: texture,
     emissiveIntensity: .32 + profile.water * .22,
-    roughness: .3 + profile.cotton * .16,
+    roughness: .2 + profile.cotton * .13,
     metalness: 0,
+    clearcoat: .92,
+    clearcoatRoughness: .08 + profile.cotton * .08,
+    sheen: .22,
+    sheenColor: new THREE.Color(0x8fffd4),
+    sheenRoughness: .45,
+    ior: 1.5,
+    specularIntensity: .92,
+    specularColor: new THREE.Color(0xc8ffe9),
     transparent: false,
     opacity: 1,
     side: THREE.DoubleSide,
@@ -553,30 +573,66 @@ function createCutFaceMaterial(profile, texture) {
   });
 }
 
-function createFaceAssembly(faceGeometry, material, points, quaternion, position) {
+function createTransmittedGlowMaterial(texture) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: { value: texture },
+      uLightUv: { value: new THREE.Vector2(.5, .5) },
+      uStrength: { value: .55 },
+      uTranslucency: { value: .68 },
+      uLightColor: { value: new THREE.Color(0xd8fff0) }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform sampler2D uMap;
+      uniform vec2 uLightUv;
+      uniform float uStrength;
+      uniform float uTranslucency;
+      uniform vec3 uLightColor;
+      varying vec2 vUv;
+      void main() {
+        vec3 jade = texture2D(uMap, vUv).rgb;
+        vec2 delta = (vUv - uLightUv) * vec2(1.0, 1.08);
+        float distance2 = dot(delta, delta);
+        float core = exp(-distance2 * 18.0);
+        float halo = exp(-distance2 * 4.5) * 0.32;
+        float luma = dot(jade, vec3(0.2126, 0.7152, 0.0722));
+        float structure = 0.58 + (1.0 - luma) * 0.82;
+        float alpha = (core + halo) * uStrength * mix(0.16, 0.56, uTranslucency);
+        vec3 transmitted = mix(uLightColor, jade * 1.75, 0.42) * structure;
+        gl_FragColor = vec4(transmitted, clamp(alpha, 0.0, 0.82));
+      }
+    `,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending
+  });
+}
+
+function createFaceAssembly(faceGeometry, material, points, quaternion, position, offsetDirection = 1) {
   const assembly = new THREE.Group();
   assembly.quaternion.copy(quaternion);
   assembly.position.copy(position);
 
   const face = new THREE.Mesh(faceGeometry, material);
-  face.position.z = .012;
+  face.position.z = .012 * offsetDirection;
   face.renderOrder = 3;
   assembly.add(face);
 
-  const glow = new THREE.Mesh(faceGeometry, new THREE.MeshBasicMaterial({
-    color: 0x35ffb5,
-    transparent: true,
-    opacity: .12,
-    depthTest: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending
-  }));
-  glow.position.z = .016;
+  const glow = new THREE.Mesh(faceGeometry, createTransmittedGlowMaterial(material.map));
+  glow.position.z = .016 * offsetDirection;
   glow.renderOrder = 4;
   assembly.add(glow);
 
-  const borderPoints = points.map((point) => new THREE.Vector3(point.x, point.y, .02));
+  const borderPoints = points.map((point) => new THREE.Vector3(point.x, point.y, .02 * offsetDirection));
   borderPoints.push(borderPoints[0].clone());
   const outline = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(borderPoints),
@@ -594,6 +650,7 @@ function buildHalves(jadeTexture = null) {
       preserveTextures: new Set([stoneResources.rockTexture])
     });
   }
+  inspectionLight = null;
   const group = new THREE.Group();
   const normal = cutNormal(state.angle);
   const position = cutPosition(state.angle, state.depth);
@@ -615,21 +672,16 @@ function buildHalves(jadeTexture = null) {
 
   const faceMaterialA = createCutFaceMaterial(state.stone, jadeTexture);
   const faceMaterialB = createCutFaceMaterial(state.stone, jadeTexture);
-  const capA = createFaceAssembly(faceGeo, faceMaterialA, points, quaternion, position);
-  const capB = createFaceAssembly(faceGeo, faceMaterialB, points, quaternion, position);
+  const capA = createFaceAssembly(faceGeo, faceMaterialA, points, quaternion, position, 1);
+  const capB = createFaceAssembly(faceGeo, faceMaterialB, points, quaternion, position, -1);
 
   const halfA = new THREE.Group();
   const halfB = new THREE.Group();
   halfA.add(rockA, capA.assembly);
   halfB.add(rockB, capB.assembly);
 
-  const faceLightA = new THREE.PointLight(0x25e7a2, 3.2 + state.stone.water * 4, 3.4, 1.8);
-  const faceLightB = faceLightA.clone();
-  faceLightA.position.copy(position).addScaledVector(normal, .28);
-  faceLightB.position.copy(position).addScaledVector(normal, -.28);
-  halfA.add(faceLightA);
-  halfB.add(faceLightB);
-  group.add(halfA, halfB);
+  inspectionLight = new THREE.PointLight(0xd8fff0, 0, 8.5, 1.6);
+  group.add(halfA, halfB, inspectionLight);
   group.visible = false;
   stoneRoot.add(group);
   halves = {
@@ -709,6 +761,61 @@ function updateLedger() {
   ui.supplierFunds.textContent = formatMoney(state.money);
 }
 
+function inspectionColor(temperature, target = new THREE.Color()) {
+  if (temperature <= 5600) return target.copy(INSPECTION_WARM).lerp(INSPECTION_NEUTRAL, (temperature - 3200) / 2400);
+  return target.copy(INSPECTION_NEUTRAL).lerp(INSPECTION_COOL, (temperature - 5600) / 1600);
+}
+
+function applyInspectionLight(updateUi = true) {
+  if (!halves || !inspectionLight) return;
+  const settings = state.inspection;
+  const tangent = halves.presentationTangent ?? computeCutPresentation(halves.normal, halves.radius, 1, 1).tangent;
+  const bitangent = inspectionBitangentScratch.crossVectors(halves.normal, tangent).normalize();
+  const x = (settings.x - .5) * 2;
+  const y = (settings.y - .5) * 2;
+  const lightColor = inspectionColor(settings.temperature, inspectionColorScratch);
+
+  inspectionLight.color.copy(lightColor);
+  inspectionLight.intensity = state.phase === 'result' ? 12 + settings.intensity * 42 : 0;
+  inspectionLight.position.copy(halves.position)
+    .addScaledVector(halves.normal, 1.7)
+    .addScaledVector(tangent, x * halves.radius * .72)
+    .addScaledVector(bitangent, y * halves.radius * .72);
+
+  for (const face of [halves.faceA, halves.faceB]) {
+    face.material.emissiveIntensity = .18 + settings.translucency * .28;
+    face.material.roughness = .29 - settings.translucency * .12 + state.stone.cotton * .1;
+    face.material.clearcoatRoughness = .13 - settings.translucency * .07 + state.stone.cotton * .05;
+  }
+  for (const glow of [halves.glowA, halves.glowB]) {
+    const uniforms = glow.material.uniforms;
+    uniforms.uLightUv.value.set(settings.x, settings.y);
+    uniforms.uStrength.value = settings.intensity;
+    uniforms.uTranslucency.value = settings.translucency;
+    uniforms.uLightColor.value.copy(lightColor);
+  }
+
+  if (!updateUi) return;
+  ui.lightPuck.style.left = `${settings.x * 100}%`;
+  ui.lightPuck.style.top = `${(1 - settings.y) * 100}%`;
+  ui.lightIntensity.value = Math.round(settings.intensity * 100);
+  ui.translucency.value = Math.round(settings.translucency * 100);
+  ui.lightTemperature.value = settings.temperature;
+  ui.lightIntensityOutput.textContent = `${Math.round(settings.intensity * 100)}%`;
+  ui.translucencyOutput.textContent = `${Math.round(settings.translucency * 100)}%`;
+  ui.temperatureOutput.textContent = `${settings.temperature}K`;
+  ui.lightModeLabel.textContent = settings.auto ? '自动巡光' : '自由灯位';
+  ui.autoLightButton.classList.toggle('active', settings.auto);
+}
+
+function setInspectionPosition(clientX, clientY) {
+  const rect = ui.lightPad.getBoundingClientRect();
+  state.inspection.x = THREE.MathUtils.clamp((clientX - rect.left) / rect.width, 0, 1);
+  state.inspection.y = 1 - THREE.MathUtils.clamp((clientY - rect.top) / rect.height, 0, 1);
+  state.inspection.auto = false;
+  applyInspectionLight();
+}
+
 function purchaseStone(profile, charge = true) {
   if (state.stone || (charge && state.money < profile.cost)) return false;
   state.seed = profile.seed;
@@ -722,6 +829,8 @@ function purchaseStone(profile, charge = true) {
   cameraTween = null;
   updateLedger();
   ui.resultCard.classList.remove('visible');
+  ui.controlPanel.classList.remove('inspecting');
+  state.inspection.auto = false;
   ui.supplierOverlay.classList.remove('visible');
   ui.cutButton.disabled = false;
   ui.newStoneButton.disabled = false;
@@ -802,6 +911,8 @@ function restartSeason() {
   state.stats = createSeasonStats();
   state.stone = null;
   state.phase = 'supplier';
+  state.inspection.auto = false;
+  ui.controlPanel.classList.remove('inspecting');
   if (stoneRoot) {
     disposeObject(stoneRoot);
     stoneRoot = wholeRock = halves = stoneResources = previewGroup = null;
@@ -973,8 +1084,11 @@ function showResult() {
   ui.resultCrack.textContent = result.crackName;
   ui.resultPrice.textContent = formatMoney(result.price);
   ui.resultCard.classList.add('visible');
+  ui.controlPanel.classList.add('inspecting');
+  ui.toggleReportButton.textContent = '收起估价报告';
   ui.sellButton.textContent = `按 ${formatMoney(result.price)} 出售`;
-  ui.sceneState.textContent = `双面鉴赏 · ${result.badge} · 可拖拽观察`;
+  ui.sceneState.textContent = `双面鉴赏 · ${result.badge} · 拖拽旋转并移动鉴赏灯`;
+  applyInspectionLight();
 }
 
 function sellStone() {
@@ -993,6 +1107,7 @@ function sellStone() {
     state.stone = null;
     state.inventory = [];
     ui.resultCard.classList.remove('visible');
+    ui.controlPanel.classList.remove('inspecting');
     if (state.day >= SEASON_DAYS) {
       state.day = SEASON_DAYS + 1;
       showSeasonResult('complete');
@@ -1012,7 +1127,50 @@ ui.newStoneButton.addEventListener('click', openSupplier);
 ui.supplierClose.addEventListener('click', () => ui.supplierOverlay.classList.remove('visible'));
 ui.restartButton.addEventListener('click', restartSeason);
 ui.sellButton.addEventListener('click', sellStone);
-ui.resultClose.addEventListener('click', () => ui.resultCard.classList.remove('visible'));
+ui.resultClose.addEventListener('click', () => {
+  ui.resultCard.classList.remove('visible');
+  ui.toggleReportButton.textContent = '展开估价报告';
+});
+ui.lightPad.addEventListener('pointerdown', (event) => {
+  ui.lightPad.setPointerCapture(event.pointerId);
+  setInspectionPosition(event.clientX, event.clientY);
+});
+ui.lightPad.addEventListener('pointermove', (event) => {
+  if (ui.lightPad.hasPointerCapture(event.pointerId)) setInspectionPosition(event.clientX, event.clientY);
+});
+ui.lightPad.addEventListener('keydown', (event) => {
+  const step = event.shiftKey ? .02 : .05;
+  if (event.key === 'ArrowLeft') state.inspection.x -= step;
+  else if (event.key === 'ArrowRight') state.inspection.x += step;
+  else if (event.key === 'ArrowDown') state.inspection.y -= step;
+  else if (event.key === 'ArrowUp') state.inspection.y += step;
+  else return;
+  event.preventDefault();
+  state.inspection.x = THREE.MathUtils.clamp(state.inspection.x, 0, 1);
+  state.inspection.y = THREE.MathUtils.clamp(state.inspection.y, 0, 1);
+  state.inspection.auto = false;
+  applyInspectionLight();
+});
+ui.lightIntensity.addEventListener('input', () => {
+  state.inspection.intensity = Number(ui.lightIntensity.value) / 100;
+  applyInspectionLight();
+});
+ui.translucency.addEventListener('input', () => {
+  state.inspection.translucency = Number(ui.translucency.value) / 100;
+  applyInspectionLight();
+});
+ui.lightTemperature.addEventListener('input', () => {
+  state.inspection.temperature = Number(ui.lightTemperature.value);
+  applyInspectionLight();
+});
+ui.autoLightButton.addEventListener('click', () => {
+  state.inspection.auto = !state.inspection.auto;
+  applyInspectionLight();
+});
+ui.toggleReportButton.addEventListener('click', () => {
+  const visible = ui.resultCard.classList.toggle('visible');
+  ui.toggleReportButton.textContent = visible ? '收起估价报告' : '展开估价报告';
+});
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Shift') controls.rotateSpeed = .25;
@@ -1067,7 +1225,8 @@ function animateCut(time) {
     const reveal = THREE.MathUtils.smoothstep(p, .72, .94);
     halves.faceA.material.emissiveIntensity = .32 + state.stone.water * .22 + reveal * .18;
     halves.faceB.material.emissiveIntensity = halves.faceA.material.emissiveIntensity;
-    halves.glowA.material.opacity = halves.glowB.material.opacity = .1 + reveal * .18;
+    halves.glowA.material.uniforms.uStrength.value = .12 + reveal * .24;
+    halves.glowB.material.uniforms.uStrength.value = .12 + reveal * .24;
   }
 
   if (p >= 1) {
@@ -1092,6 +1251,7 @@ window.addEventListener('resize', resize);
 window.addEventListener('pagehide', () => cutTextureWorker.dispose(), { once: true });
 
 let lastRenderedAt = 0;
+let lastInspectionUpdate = 0;
 const frameBudget = new AdaptiveFrameBudget({ targetFps: renderProfile.targetFps });
 function animate(time) {
   requestAnimationFrame(animate);
@@ -1107,6 +1267,12 @@ function animate(time) {
     previewGroup.children[0].material.opacity = shimmer;
   }
   if (state.phase === 'cutting') animateCut(time);
+  if (state.phase === 'result' && state.inspection.auto && time - lastInspectionUpdate > 33) {
+    lastInspectionUpdate = time;
+    state.inspection.x = .5 + Math.cos(time * .00055) * .34;
+    state.inspection.y = .5 + Math.sin(time * .00072) * .3;
+    applyInspectionLight(true);
+  }
   updateCameraTween(time);
   jadeLight.intensity = 16 + Math.sin(time * .0018) * 2.5;
   renderer.render(scene, camera);
