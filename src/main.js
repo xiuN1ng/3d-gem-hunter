@@ -4,7 +4,8 @@ import { applyPlanarCutUVs, computeCutPresentation, computeShowcaseTransform, in
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import { createSeasonStats, createSupplierInventory, finishReason, SEASON_DAYS, STARTING_MONEY } from './game/season.js';
-import { makeStoneProfile } from './game/stoneProfile.js';
+import { makeRockShape, makeStoneProfile } from './game/stoneProfile.js';
+import { CUTTING_TOOLS } from './game/tools.js';
 import { fbm, hash3, mulberry32, valueNoise } from './volume/noise.js';
 import './style.css';
 
@@ -21,10 +22,12 @@ const ui = {
   funds: $('#funds'), day: $('#day'), stoneId: $('#stoneId'), origin: $('#origin'), weight: $('#weight'),
   skin: $('#skin'), cost: $('#cost'), riskCrack: $('#riskCrack'), riskFog: $('#riskFog'),
   greenChance: $('#greenChance'), inspectorNote: $('#inspectorNote'), angle: $('#angle'), depth: $('#depth'),
+  shape: $('#shape'), toolOutput: $('#toolOutput'), toolButtons: [...document.querySelectorAll('[data-tool]')],
   angleOutput: $('#angleOutput'), depthOutput: $('#depthOutput'), dialNeedle: $('#dialNeedle'),
   depthFill: $('#depthFill'), depthThumb: $('#depthThumb'), lossEstimate: $('#lossEstimate'),
   faceEstimate: $('#faceEstimate'), cutButton: $('#cutButton'), newStoneButton: $('#newStoneButton'),
   cutProgress: $('#cutProgress'), cutProgressBar: $('#cutProgressBar'), cutProgressText: $('#cutProgressText'),
+  cutProgressLabel: $('#cutProgressLabel'),
   sceneState: $('#sceneState'), temperature: $('#temperature'), resultCard: $('#resultCard'),
   resultBadge: $('#resultBadge'), resultName: $('#resultName'), resultSummary: $('#resultSummary'),
   resultWater: $('#resultWater'), resultColor: $('#resultColor'), resultCrack: $('#resultCrack'),
@@ -48,6 +51,8 @@ const state = {
   seed: 713,
   stone: null,
   phase: 'supplier',
+  tool: 'saw',
+  cutDuration: CUTTING_TOOLS.saw.duration,
   cutProgress: 0,
   cutStartedAt: 0,
   split: 0,
@@ -270,7 +275,8 @@ function makeRockGeometry(seed) {
   const pos = geometry.attributes.position;
   const colors = [];
   const direction = new THREE.Vector3();
-  const axisScale = rockAxisScale(seed);
+  const shape = makeRockShape(seed);
+  const axisScale = rockAxisScale(seed, shape);
   const warm = new THREE.Color(0x483c2c);
   const dark = new THREE.Color(0x171815);
   const moss = new THREE.Color(0x29392b);
@@ -278,7 +284,7 @@ function makeRockGeometry(seed) {
     direction.fromBufferAttribute(pos, i).normalize();
     const broad = fbm(direction.x * 1.25 + 2.3, direction.y * 1.25 - 4.1, direction.z * 1.25, seed, 5);
     const fine = fbm(direction.x * 5.7, direction.y * 5.7, direction.z * 5.7, seed + 31, 3);
-    const radius = rockSurfaceRadius(direction, seed);
+    const radius = rockSurfaceRadius(direction, seed, shape);
     pos.setXYZ(i, direction.x * radius * axisScale.x, direction.y * radius * axisScale.y, direction.z * radius * axisScale.z);
     const c = dark.clone().lerp(warm, Math.min(1, broad * .83));
     if (fine > .77) c.lerp(moss, .28);
@@ -354,29 +360,40 @@ function makeJadeTexture(profile) {
   return texture;
 }
 
-function rockAxisScale(seed) {
+function rockAxisScale(seed, shape = makeRockShape(seed)) {
   return new THREE.Vector3(
-    .95 + .08 * Math.sin(seed * .07),
-    1.08 + .06 * Math.cos(seed * .13),
-    .88 + .07 * Math.sin(seed * .11)
+    shape.axis.x * shape.size,
+    shape.axis.y * shape.size,
+    shape.axis.z * shape.size
   );
 }
 
-function rockSurfaceRadius(direction, seed) {
+function rockSurfaceRadius(direction, seed, shape = makeRockShape(seed)) {
   const broad = fbm(direction.x * 1.25 + 2.3, direction.y * 1.25 - 4.1, direction.z * 1.25, seed, 5);
   const fine = fbm(direction.x * 5.7, direction.y * 5.7, direction.z * 5.7, seed + 31, 3);
   const ridge = Math.abs(valueNoise(direction.x * 8, direction.y * 8, direction.z * 8, seed + 9) - .5);
-  return 1.84 + broad * .55 + fine * .16 - ridge * .08;
+  const lobe = fbm(
+    direction.x * 2.6 + shape.phase,
+    direction.y * 2.1 - shape.phase * .7,
+    direction.z * 2.4 + shape.phase * .35,
+    seed + 47,
+    3
+  );
+  const skew = Math.sin((direction.x + shape.phase) * 3.4) * Math.cos((direction.z - shape.phase) * 2.7);
+  const naturalVariation = (broad - .5) * .34 + (lobe - .5) * shape.lobe + skew * shape.asymmetry * .16;
+  const angularBreakup = ridge * shape.angularity * .2;
+  return Math.max(.98, 1.64 + broad * .5 + fine * .16 + naturalVariation - angularBreakup);
 }
 
-function pointInsideRock(point, seed, axisScale) {
+function pointInsideRock(point, seed, axisScale, shape = makeRockShape(seed)) {
   const unscaled = point.clone().divide(axisScale);
-  return unscaled.length() <= rockSurfaceRadius(unscaled.clone().normalize(), seed);
+  return unscaled.length() <= rockSurfaceRadius(unscaled.clone().normalize(), seed, shape);
 }
 
 function createAnalyticalCutShape(normal, center, seed, sampleCount = 112) {
   const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
-  const axisScale = rockAxisScale(seed);
+  const shapeParams = makeRockShape(seed);
+  const axisScale = rockAxisScale(seed, shapeParams);
   const points = [];
   let radius = 0;
 
@@ -388,7 +405,7 @@ function createAnalyticalCutShape(normal, center, seed, sampleCount = 112) {
     for (let step = 0; step < 16; step++) {
       const distance = (inside + outside) * .5;
       const sample = center.clone().addScaledVector(radial, distance);
-      if (pointInsideRock(sample, seed, axisScale)) inside = distance;
+      if (pointInsideRock(sample, seed, axisScale, shapeParams)) inside = distance;
       else outside = distance;
     }
     radius = Math.max(radius, inside);
@@ -515,7 +532,100 @@ function buildPreviewPlane() {
   stoneRoot.add(previewGroup);
 }
 
-function createCutFX(radius, normal, position) {
+function createToolAssembly(toolId, radius, normal) {
+  const root = new THREE.Group();
+  const darkMetal = new THREE.MeshStandardMaterial({ color: 0x202825, metalness: .84, roughness: .3 });
+  const brass = new THREE.MeshStandardMaterial({ color: 0x9b7743, metalness: .82, roughness: .28 });
+  const diamond = new THREE.MeshStandardMaterial({ color: 0xd5fff1, emissive: 0x237f65, emissiveIntensity: .7, metalness: .55, roughness: .18 });
+  const guide = new THREE.LineBasicMaterial({ color: 0xf0fff9, transparent: true, opacity: .9, blending: THREE.AdditiveBlending });
+  const glowGuide = new THREE.LineBasicMaterial({ color: 0x4de4b3, transparent: true, opacity: .36, blending: THREE.AdditiveBlending });
+  const axisQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  root.quaternion.copy(axisQuaternion);
+
+  if (toolId === 'wire') {
+    const wireRadius = radius * .82;
+    const wirePoints = [];
+    const glowPoints = [];
+    for (let i = 0; i < 40; i++) {
+      const angle = i / 40 * Math.PI * 2;
+      const point = new THREE.Vector3(
+        Math.cos(angle) * wireRadius,
+        Math.sin(angle) * wireRadius * .76,
+        .035
+      );
+      wirePoints.push(point);
+      glowPoints.push(point.clone().multiplyScalar(1.025));
+    }
+    const wire = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(wirePoints), guide);
+    const wireGlow = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(glowPoints), glowGuide);
+    const wireRig = new THREE.Group();
+    wireRig.add(wire, wireGlow);
+    const pulleyGeometry = new THREE.TorusGeometry(.22, .055, 6, 16);
+    const pulleys = new THREE.Group();
+    for (const x of [-wireRadius, wireRadius]) {
+      const pulley = new THREE.Mesh(pulleyGeometry, brass);
+      pulley.position.set(x, 0, -.08);
+      pulleys.add(pulley);
+    }
+    const tensionBar = new THREE.Mesh(new THREE.BoxGeometry(wireRadius * 2.25, .09, .16), darkMetal);
+    tensionBar.position.z = -.28;
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(.09, .13, .72, 8), darkMetal);
+    handle.rotation.z = Math.PI / 2;
+    handle.position.set(0, -.58, -.28);
+    root.add(wireRig, pulleys, tensionBar, handle);
+    return { root, toolId, wireRig, wire, wireGlow, pulleys };
+  }
+
+  if (toolId === 'burr') {
+    const rig = new THREE.Group();
+    const bitSpin = new THREE.Group();
+    const bit = new THREE.Mesh(new THREE.CylinderGeometry(.13, .22, .42, mobileQuality ? 10 : 16), diamond);
+    bit.rotation.x = Math.PI / 2;
+    const bitCollar = new THREE.Mesh(new THREE.TorusGeometry(.19, .045, 6, 16), brass);
+    bitSpin.add(bit, bitCollar);
+    const guard = new THREE.Mesh(new THREE.TorusGeometry(.28, .075, 6, 20, Math.PI * 1.35), darkMetal);
+    guard.position.z = -.16;
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(.32, .82, .3), darkMetal);
+    arm.position.set(0, .42, -.27);
+    const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(.035, .055, .32, 8), brass);
+    nozzle.rotation.x = Math.PI / 2;
+    nozzle.position.set(.24, .32, .02);
+    rig.add(bitSpin, guard, arm, nozzle);
+    root.add(rig);
+    return { root, toolId, rig, bitSpin, bit, nozzle };
+  }
+
+  const wheelRadius = radius * 1.08;
+  const rig = new THREE.Group();
+  const wheelSpin = new THREE.Group();
+  const wheel = new THREE.Mesh(new THREE.CylinderGeometry(wheelRadius, wheelRadius, .12, mobileQuality ? 24 : 36), diamond);
+  wheel.rotation.x = Math.PI / 2;
+  wheelSpin.add(wheel);
+  const toothGeometry = new THREE.BoxGeometry(.055, .14, .07);
+  const toothCount = mobileQuality ? 14 : 22;
+  for (let i = 0; i < toothCount; i++) {
+    const angle = i / toothCount * Math.PI * 2;
+    const tooth = new THREE.Mesh(toothGeometry, brass);
+    tooth.position.set(Math.cos(angle) * wheelRadius, Math.sin(angle) * wheelRadius, 0);
+    tooth.rotation.z = angle;
+    wheelSpin.add(tooth);
+  }
+  const guard = new THREE.Mesh(new THREE.TorusGeometry(wheelRadius * 1.08, .13, 6, mobileQuality ? 20 : 32, Math.PI * 1.38), darkMetal);
+  guard.position.z = -.08;
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(.16, .16, .28, 12), brass);
+  hub.rotation.x = Math.PI / 2;
+  hub.position.z = -.12;
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(.36, .62, .4), darkMetal);
+  arm.position.set(0, .42, -.34);
+  const coolant = new THREE.Mesh(new THREE.CylinderGeometry(.035, .055, .34, 8), brass);
+  coolant.rotation.x = Math.PI / 2;
+  coolant.position.set(.25, .25, .03);
+  rig.add(wheelSpin, guard, hub, arm, coolant);
+  root.add(rig);
+  return { root, toolId: 'saw', rig, wheelSpin, wheel, guard, coolant };
+}
+
+function createCutFX(radius, normal, position, toolId = 'saw') {
   const group = new THREE.Group();
   const random = mulberry32(state.stone.seed + 551);
   const count = renderProfile.particleCount;
@@ -539,10 +649,38 @@ function createCutFX(radius, normal, position) {
   beam.quaternion.copy(quaternion);
   beam.position.copy(position);
   beam.userData.radius = radius;
-  group.add(beam);
-  group.userData = { particles, beam, quaternion, position: position.clone(), radius, basePositions: positions.slice() };
+  const toolModel = createToolAssembly(toolId, radius, normal);
+  toolModel.root.position.copy(position);
+  group.add(beam, toolModel.root);
+  group.userData = { particles, beam, toolModel, toolId, quaternion, position: position.clone(), radius, basePositions: positions.slice() };
   stoneRoot.add(group);
   return group;
+}
+
+function updateCutTool(cuttingEffect, progress, time) {
+  const { toolModel, radius, toolId } = cuttingEffect.userData;
+  if (!toolModel) return;
+  const scan = THREE.MathUtils.lerp(-radius * .78, radius * .78, progress);
+  if (toolId === 'saw') {
+    toolModel.rig.position.y = scan;
+    toolModel.wheelSpin.rotation.z = -progress * Math.PI * 18;
+    return;
+  }
+  if (toolId === 'wire') {
+    toolModel.wireRig.position.x = Math.sin(progress * Math.PI * 5) * radius * .045;
+    toolModel.wireRig.position.y = scan * .35;
+    toolModel.wire.material.opacity = .64 + Math.sin(time * .035) * .2;
+    toolModel.wireGlow.material.opacity = .28 + Math.sin(time * .035) * .1;
+    toolModel.pulleys.rotation.z = progress * Math.PI * 12;
+    return;
+  }
+  toolModel.rig.position.set(
+    Math.sin(progress * Math.PI * 2) * radius * .5,
+    scan,
+    0
+  );
+  toolModel.bitSpin.rotation.z = progress * Math.PI * 24;
+  toolModel.nozzle.position.y = .32;
 }
 
 function createCutFaceMaterial(profile, texture) {
@@ -755,10 +893,22 @@ function updateControls() {
   scheduleCutPreview();
 }
 
+function selectTool(toolId) {
+  const tool = CUTTING_TOOLS[toolId];
+  if (!tool || state.phase !== 'inspect') return;
+  state.tool = toolId;
+  state.cutDuration = tool.duration;
+  ui.toolOutput.textContent = tool.label;
+  ui.cutProgressLabel.textContent = `${tool.shortLabel}进给`;
+  for (const button of ui.toolButtons) button.classList.toggle('active', button.dataset.tool === toolId);
+  ui.sceneState.textContent = `${tool.label}已校准 · 原石扫描就绪`;
+}
+
 function updateStoneUI(profile) {
   ui.stoneId.textContent = profile.id;
   ui.origin.textContent = profile.origin;
   ui.weight.textContent = profile.weight.toFixed(1);
+  ui.shape.textContent = `${profile.shapeName} · 原生`;
   ui.skin.textContent = profile.skin;
   ui.cost.textContent = formatMoney(profile.cost);
   ui.greenChance.textContent = `${profile.greenChance}%`;
@@ -893,7 +1043,7 @@ function renderSupplierInventory() {
     card.className = 'supplier-card';
     const risk = supplierRisk(profile);
     card.innerHTML = `<header><h3>${profile.origin} · ${profile.id}</h3><span>${profile.weight.toFixed(1)} kg</span></header>
-      <dl><div><dt>皮壳</dt><dd>${profile.skin}</dd></div><div><dt>裂象</dt><dd>${risk.crack}</dd></div><div><dt>灯感</dt><dd>${risk.lamp}</dd></div><div><dt>叫价</dt><dd class="gold">${formatMoney(profile.cost)}</dd></div></dl>
+      <dl><div><dt>形制</dt><dd>${profile.shapeName}</dd></div><div><dt>皮壳</dt><dd>${profile.skin}</dd></div><div><dt>裂象</dt><dd>${risk.crack}</dd></div><div><dt>灯感</dt><dd>${risk.lamp}</dd></div><div><dt>叫价</dt><dd class="gold">${formatMoney(profile.cost)}</dd></div></dl>
       <p class="supplier-note">${profile.note}</p>`;
     const button = document.createElement('button');
     button.className = 'supplier-buy';
@@ -985,23 +1135,25 @@ function evaluateStone(profile) {
 let audioContext = null;
 let cutNoise = null;
 
-function startCutSound() {
+function startCutSound(toolId = 'saw') {
   try {
     audioContext ??= new AudioContext();
-    const length = audioContext.sampleRate * 4;
+    const tool = CUTTING_TOOLS[toolId] ?? CUTTING_TOOLS.saw;
+    const durationSeconds = tool.duration / 1000;
+    const length = Math.ceil(audioContext.sampleRate * durationSeconds);
     const buffer = audioContext.createBuffer(1, length, audioContext.sampleRate);
     const channel = buffer.getChannelData(0);
     for (let i = 0; i < length; i++) channel[i] = (Math.random() * 2 - 1) * Math.exp(-i / length * .7);
     const source = audioContext.createBufferSource();
     const filter = audioContext.createBiquadFilter();
     const gain = audioContext.createGain();
-    filter.type = 'bandpass'; filter.frequency.value = 740; filter.Q.value = .72;
+    filter.type = 'bandpass'; filter.frequency.value = toolId === 'wire' ? 510 : toolId === 'burr' ? 980 : 740; filter.Q.value = .72;
     gain.gain.setValueAtTime(.001, audioContext.currentTime);
     gain.gain.exponentialRampToValueAtTime(.07, audioContext.currentTime + .22);
-    gain.gain.exponentialRampToValueAtTime(.001, audioContext.currentTime + 3.65);
+    gain.gain.exponentialRampToValueAtTime(.001, audioContext.currentTime + durationSeconds - .12);
     source.buffer = buffer; source.loop = true;
     source.connect(filter).connect(gain).connect(audioContext.destination);
-    source.start(); source.stop(audioContext.currentTime + 3.8);
+    source.start(); source.stop(audioContext.currentTime + durationSeconds + .1);
     cutNoise = source;
   } catch { /* Audio is enhancement only. */ }
 }
@@ -1068,10 +1220,12 @@ async function startCut() {
 
   buildHalves(jadeTexture);
   state.phase = 'cutting';
+  state.cutDuration = CUTTING_TOOLS[state.tool].duration;
   state.cutStartedAt = performance.now();
-  ui.sceneState.textContent = '金刚砂轮运转中';
-  cuttingFX = createCutFX(halves.radius, halves.normal, halves.position);
-  startCutSound();
+  ui.sceneState.textContent = `${CUTTING_TOOLS[state.tool].label}运转中`;
+  ui.cutProgressLabel.textContent = `${CUTTING_TOOLS[state.tool].shortLabel}进给`;
+  cuttingFX = createCutFX(halves.radius, halves.normal, halves.position, state.tool);
+  startCutSound(state.tool);
 }
 
 function focusCutSurface() {
@@ -1158,6 +1312,7 @@ function sellStone() {
 
 ui.angle.addEventListener('input', updateControls);
 ui.depth.addEventListener('input', updateControls);
+for (const button of ui.toolButtons) button.addEventListener('click', () => selectTool(button.dataset.tool));
 $('#angleMinus').addEventListener('click', () => { ui.angle.value = Math.max(-40, Number(ui.angle.value) - 1); updateControls(); });
 $('#anglePlus').addEventListener('click', () => { ui.angle.value = Math.min(40, Number(ui.angle.value) + 1); updateControls(); });
 ui.cutButton.addEventListener('click', startCut);
@@ -1217,7 +1372,7 @@ window.addEventListener('keydown', (event) => {
 window.addEventListener('keyup', (event) => { if (event.key === 'Shift') controls.rotateSpeed = 1; });
 
 function animateCut(time) {
-  state.cutProgress = timelineProgress(time, state.cutStartedAt, 3700);
+  state.cutProgress = timelineProgress(time, state.cutStartedAt, state.cutDuration);
   const p = state.cutProgress;
   const percent = Math.round(p * 100);
   ui.cutProgressBar.style.width = `${percent}%`;
@@ -1235,6 +1390,7 @@ function animateCut(time) {
     attr.needsUpdate = true;
     beam.position.copy(halves.position).add(new THREE.Vector3(0, THREE.MathUtils.lerp(-radius * .72, radius * .72, p), .02).applyQuaternion(beam.quaternion));
     beam.material.opacity = Math.sin(p * Math.PI) * .95;
+    updateCutTool(cuttingFX, p, time);
   }
 
   previewGroup.visible = p < .78;
