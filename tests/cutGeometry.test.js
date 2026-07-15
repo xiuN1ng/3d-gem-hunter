@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { applyPlanarCutUVs, computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
 
 function pointSegmentDistanceSquared(point, a, b) {
   const edge = b.clone().sub(a);
@@ -90,4 +90,12 @@ test('cut face UVs map the sampled volume extent into the complete texture', () 
   ], 3));
   applyPlanarCutUVs(geometry, 2.4);
   assert.deepEqual([...geometry.attributes.uv.array], [0, 0, .5, .5, 1, 1]);
+});
+
+test('rear cut cap reverses its surface normal before the half is turned', () => {
+  const geometry = new THREE.PlaneGeometry(2, 2);
+  const before = geometry.attributes.normal.getZ(0);
+  reverseTriangleWinding(geometry);
+  assert.ok(before > 0);
+  assert.ok(geometry.attributes.normal.getZ(0) < 0);
 });

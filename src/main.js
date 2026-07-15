@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { applyPlanarCutUVs, computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import { createSeasonStats, createSupplierInventory, finishReason, SEASON_DAYS, STARTING_MONEY } from './game/season.js';
@@ -434,7 +434,7 @@ let halves = null;
 let cuttingFX = null;
 let cameraTween = null;
 let stoneResources = null;
-let inspectionLight = null;
+let inspectionLights = [];
 
 function disposeObject(object, options = {}) {
   const preserveGeometries = options.preserveGeometries ?? new Set();
@@ -613,7 +613,10 @@ function createTransmittedGlowMaterial(texture) {
     depthTest: true,
     depthWrite: false,
     side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending
+    blending: THREE.AdditiveBlending,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3
   });
 }
 
@@ -650,7 +653,7 @@ function buildHalves(jadeTexture = null) {
       preserveTextures: new Set([stoneResources.rockTexture])
     });
   }
-  inspectionLight = null;
+  inspectionLights = [];
   const group = new THREE.Group();
   const normal = cutNormal(state.angle);
   const position = cutPosition(state.angle, state.depth);
@@ -666,6 +669,7 @@ function buildHalves(jadeTexture = null) {
 
   const { shape, points, quaternion, radius } = createCutShape(geometry, normal, position, state.stone.seed);
   const faceGeo = applyPlanarCutUVs(new THREE.ShapeGeometry(shape), CUT_TEXTURE_EXTENT);
+  const faceGeoB = reverseTriangleWinding(faceGeo.clone());
 
   // Phase 1: use volumetric sampling for cut face texture
   jadeTexture ??= makeJadeTexture(state.stone);
@@ -673,15 +677,19 @@ function buildHalves(jadeTexture = null) {
   const faceMaterialA = createCutFaceMaterial(state.stone, jadeTexture);
   const faceMaterialB = createCutFaceMaterial(state.stone, jadeTexture);
   const capA = createFaceAssembly(faceGeo, faceMaterialA, points, quaternion, position, 1);
-  const capB = createFaceAssembly(faceGeo, faceMaterialB, points, quaternion, position, -1);
+  const capB = createFaceAssembly(faceGeoB, faceMaterialB, points, quaternion, position, -1);
 
   const halfA = new THREE.Group();
   const halfB = new THREE.Group();
   halfA.add(rockA, capA.assembly);
   halfB.add(rockB, capB.assembly);
 
-  inspectionLight = new THREE.PointLight(0xd8fff0, 0, 8.5, 1.6);
-  group.add(halfA, halfB, inspectionLight);
+  const inspectionLightA = new THREE.PointLight(0xd8fff0, 0, 5.2, 1.35);
+  const inspectionLightB = new THREE.PointLight(0xd8fff0, 0, 5.2, 1.35);
+  halfA.add(inspectionLightA);
+  halfB.add(inspectionLightB);
+  inspectionLights = [inspectionLightA, inspectionLightB];
+  group.add(halfA, halfB);
   group.visible = false;
   stoneRoot.add(group);
   halves = {
@@ -767,7 +775,7 @@ function inspectionColor(temperature, target = new THREE.Color()) {
 }
 
 function applyInspectionLight(updateUi = true) {
-  if (!halves || !inspectionLight) return;
+  if (!halves || inspectionLights.length !== 2) return;
   const settings = state.inspection;
   const tangent = halves.presentationTangent ?? computeCutPresentation(halves.normal, halves.radius, 1, 1).tangent;
   const bitangent = inspectionBitangentScratch.crossVectors(halves.normal, tangent).normalize();
@@ -775,10 +783,17 @@ function applyInspectionLight(updateUi = true) {
   const y = (settings.y - .5) * 2;
   const lightColor = inspectionColor(settings.temperature, inspectionColorScratch);
 
-  inspectionLight.color.copy(lightColor);
-  inspectionLight.intensity = state.phase === 'result' ? 12 + settings.intensity * 42 : 0;
-  inspectionLight.position.copy(halves.position)
-    .addScaledVector(halves.normal, 1.7)
+  const lightIntensity = state.phase === 'result' ? 6 + settings.intensity * 30 : 0;
+  for (const light of inspectionLights) {
+    light.color.copy(lightColor);
+    light.intensity = lightIntensity;
+  }
+  inspectionLights[0].position.copy(halves.position)
+    .addScaledVector(halves.normal, 1.18)
+    .addScaledVector(tangent, x * halves.radius * .72)
+    .addScaledVector(bitangent, y * halves.radius * .72);
+  inspectionLights[1].position.copy(halves.position)
+    .addScaledVector(halves.normal, -1.18)
     .addScaledVector(tangent, x * halves.radius * .72)
     .addScaledVector(bitangent, y * halves.radius * .72);
 
@@ -1038,19 +1053,22 @@ async function startCut() {
 
 function focusCutSurface() {
   if (!halves || !stoneRoot) return;
-  const localFocus = halves.position.clone();
-  if (mobileQuality) localFocus.add(halves.halfA.position);
-  const worldFocus = stoneRoot.localToWorld(localFocus);
-  const worldRotation = stoneRoot.getWorldQuaternion(new THREE.Quaternion());
-  const worldNormal = halves.normal.clone().applyQuaternion(worldRotation).normalize();
-  const worldTangent = halves.presentationTangent.clone().applyQuaternion(worldRotation).normalize();
+  stoneRoot.updateMatrixWorld(true);
+  const centerA = halves.faceA.getWorldPosition(new THREE.Vector3());
+  const centerB = halves.faceB.getWorldPosition(new THREE.Vector3());
+  const worldFocus = mobileQuality ? centerA : centerA.clone().add(centerB).multiplyScalar(.5);
+  const referenceNormal = halves.normal.clone().applyQuaternion(stoneRoot.getWorldQuaternion(new THREE.Quaternion())).normalize();
+  const normalA = new THREE.Vector3(0, 0, 1).applyQuaternion(halves.faceA.getWorldQuaternion(new THREE.Quaternion())).normalize();
+  const normalB = new THREE.Vector3(0, 0, -1).applyQuaternion(halves.faceB.getWorldQuaternion(new THREE.Quaternion())).normalize();
+  if (normalA.dot(referenceNormal) < 0) normalA.negate();
+  if (normalB.dot(referenceNormal) < 0) normalB.negate();
+  const worldNormal = mobileQuality ? normalA : normalA.add(normalB).normalize();
   const framingTarget = worldFocus.clone().add(new THREE.Vector3(0, mobileQuality ? -.72 : -.48, 0));
   const distance = mobileQuality
     ? Math.max(7.2, halves.radius * 3.65)
     : Math.max(7.6, halves.radius * 4.15);
   const destination = framingTarget.clone()
     .addScaledVector(worldNormal, distance)
-    .addScaledVector(worldTangent, mobileQuality ? 0 : .16)
     .add(new THREE.Vector3(0, .12, 0));
 
   cameraTween = {

@@ -121,6 +121,20 @@ export function applyPlanarCutUVs(geometry, extent = 2.4) {
   return geometry;
 }
 
+/** Reverse an indexed triangle surface while preserving positions and UVs. */
+export function reverseTriangleWinding(geometry) {
+  const index = geometry.getIndex();
+  if (!index) throw new Error('reverseTriangleWinding requires indexed geometry');
+  for (let offset = 0; offset < index.count; offset += 3) {
+    const second = index.getX(offset + 1);
+    index.setX(offset + 1, index.getX(offset + 2));
+    index.setX(offset + 2, second);
+  }
+  index.needsUpdate = true;
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
 export function computeCutPresentation(normal, radius, axialProgress, displayProgress, singleFace = false) {
   const tangent = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), normal);
   if (tangent.lengthSq() < 1e-6) tangent.crossVectors(new THREE.Vector3(1, 0, 0), normal);
