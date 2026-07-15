@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { applyPlanarCutUVs, computeCutPresentation, computeShowcaseTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, computePlatformLift, computeShowcaseTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
 
 function pointSegmentDistanceSquared(point, a, b) {
   const edge = b.clone().sub(a);
@@ -79,6 +79,11 @@ test('mobile cut presentation keeps the primary face centered', () => {
   const presentation = computeCutPresentation(normal, 2, 1, 1, true);
   assert.ok(Math.abs(presentation.halfA.dot(presentation.tangent)) < 1e-10);
   assert.ok(presentation.halfB.dot(presentation.tangent) > 2.6);
+});
+
+test('platform lift clears a low cut assembly without moving an already resting one', () => {
+  assert.ok(Math.abs(computePlatformLift(-1.82, -1.67, .04) - .19) < 1e-12);
+  assert.equal(computePlatformLift(-1.61, -1.67, .04), 0);
 });
 
 test('cut face UVs map the sampled volume extent into the complete texture', () => {

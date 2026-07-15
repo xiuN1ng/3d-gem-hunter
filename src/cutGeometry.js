@@ -153,6 +153,12 @@ export function computeCutPresentation(normal, radius, axialProgress, displayPro
   return { tangent, halfA, halfB, axialDistance, lateralDistance };
 }
 
+/** Lift a displayed cut assembly until its lowest visible bound clears the stand. */
+export function computePlatformLift(boundsMinY, platformTopY, clearance = 0) {
+  if (!Number.isFinite(boundsMinY) || !Number.isFinite(platformTopY)) return 0;
+  return Math.max(0, platformTopY + clearance - boundsMinY);
+}
+
 /** Rotate the whole stone toward a viewer while keeping the cut centre fixed in world space. */
 export function computeShowcaseTransform(surfaceNormal, pivotLocal, startQuaternion, pivotWorld, viewerDirection, progress = 1) {
   const currentWorldNormal = surfaceNormal.clone().normalize().applyQuaternion(startQuaternion).normalize();
