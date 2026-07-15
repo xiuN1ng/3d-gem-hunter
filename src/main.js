@@ -849,6 +849,12 @@ function buildHalves(jadeTexture = null) {
   };
 }
 
+function syncHalfClippingPlanes() {
+  if (!halves) return;
+  setWorldPlaneFromLocal(halves.planeA, halves.planeANormal, halves.position, halves.halfA);
+  setWorldPlaneFromLocal(halves.planeB, halves.planeBNormal, halves.position, halves.halfB);
+}
+
 function settleShowcaseOnPlatform() {
   if (!halves || !stoneRoot) return;
   stoneRoot.updateMatrixWorld(true);
@@ -859,6 +865,9 @@ function settleShowcaseOnPlatform() {
   // two clipped halves together and avoids a per-frame bounding-box walk on mobile.
   stoneRoot.position.y += lift;
   stoneRoot.updateMatrixWorld(true);
+  // The clipping planes are world-space objects; re-anchor them after moving
+  // the root or the shell will stay at the old height while the cap moves.
+  syncHalfClippingPlanes();
 }
 
 function buildStone(profile) {
@@ -1450,8 +1459,7 @@ function animateCut(time) {
     halves.halfB.quaternion.setFromAxisAngle(presentation.tangent, Math.PI * displayProgress);
     const rotatedPivot = halves.position.clone().applyQuaternion(halves.halfB.quaternion);
     halves.halfB.position.copy(presentation.halfB).add(halves.position).sub(rotatedPivot);
-    setWorldPlaneFromLocal(halves.planeA, halves.planeANormal, halves.position, halves.halfA);
-    setWorldPlaneFromLocal(halves.planeB, halves.planeBNormal, halves.position, halves.halfB);
+    syncHalfClippingPlanes();
     const reveal = THREE.MathUtils.smoothstep(p, .72, .94);
     halves.faceA.material.emissiveIntensity = .32 + state.stone.water * .22 + reveal * .18;
     halves.faceB.material.emissiveIntensity = halves.faceA.material.emissiveIntensity;
