@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import { createSeasonStats, createSupplierInventory, finishReason, SEASON_DAYS, STARTING_MONEY } from './game/season.js';
@@ -10,6 +10,7 @@ import './style.css';
 
 const $ = (selector) => document.querySelector(selector);
 const sceneHost = $('#scene');
+const CUT_TEXTURE_EXTENT = 2.4;
 
 const ui = {
   funds: $('#funds'), day: $('#day'), stoneId: $('#stoneId'), origin: $('#origin'), weight: $('#weight'),
@@ -532,29 +533,23 @@ function createCutFX(radius, normal, position) {
   return group;
 }
 
-function createJadeMaterial(profile, texture, clippingPlanes = [], boost = 1, faceSurface = false) {
-  return new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color().setHSL(.39 + profile.color * .035, .78, .29 + profile.water * .18),
+function createCutFaceMaterial(profile, texture) {
+  return new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(.38 + profile.color * .025, .2, .82),
     map: texture,
-    emissive: new THREE.Color(0x006b45),
+    emissive: new THREE.Color(0x003d29),
     emissiveMap: texture,
-    emissiveIntensity: (.5 + profile.water * .7) * boost * (faceSurface ? .72 : 1),
-    roughness: faceSurface ? .16 + profile.cotton * .2 : .05 + profile.cotton * .18,
+    emissiveIntensity: .32 + profile.water * .22,
+    roughness: .3 + profile.cotton * .16,
     metalness: 0,
-    clearcoat: 1,
-    clearcoatRoughness: .06,
-    transmission: faceSurface ? 0 : (.34 + profile.water * .36) * renderProfile.transmissionFactor,
-    thickness: 1.55,
-    ior: 1.56,
-    attenuationColor: new THREE.Color(0x08714d),
-    attenuationDistance: 1.7,
-    transparent: !faceSurface,
-    opacity: faceSurface ? 1 : .91,
+    transparent: false,
+    opacity: 1,
     side: THREE.DoubleSide,
-    depthWrite: faceSurface,
-    depthTest: !faceSurface,
-    clippingPlanes,
-    clipShadows: true
+    depthWrite: true,
+    depthTest: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
   });
 }
 
@@ -564,6 +559,7 @@ function createFaceAssembly(faceGeometry, material, points, quaternion, position
   assembly.position.copy(position);
 
   const face = new THREE.Mesh(faceGeometry, material);
+  face.position.z = .012;
   face.renderOrder = 3;
   assembly.add(face);
 
@@ -571,19 +567,20 @@ function createFaceAssembly(faceGeometry, material, points, quaternion, position
     color: 0x35ffb5,
     transparent: true,
     opacity: .12,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending
   }));
+  glow.position.z = .016;
   glow.renderOrder = 4;
   assembly.add(glow);
 
-  const borderPoints = points.map((point) => new THREE.Vector3(point.x, point.y, .006));
+  const borderPoints = points.map((point) => new THREE.Vector3(point.x, point.y, .02));
   borderPoints.push(borderPoints[0].clone());
   const outline = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(borderPoints),
-    new THREE.LineBasicMaterial({ color: 0x9affdf, transparent: true, opacity: .72, depthTest: false, blending: THREE.AdditiveBlending })
+    new THREE.LineBasicMaterial({ color: 0x9affdf, transparent: true, opacity: .72, depthTest: true, blending: THREE.AdditiveBlending })
   );
   outline.renderOrder = 5;
   assembly.add(outline);
@@ -611,32 +608,20 @@ function buildHalves(jadeTexture = null) {
   rockA.receiveShadow = rockB.receiveShadow = true;
 
   const { shape, points, quaternion, radius } = createCutShape(geometry, normal, position, state.stone.seed);
-  const faceGeo = new THREE.ShapeGeometry(shape);
+  const faceGeo = applyPlanarCutUVs(new THREE.ShapeGeometry(shape), CUT_TEXTURE_EXTENT);
 
   // Phase 1: use volumetric sampling for cut face texture
   jadeTexture ??= makeJadeTexture(state.stone);
 
-  const faceMaterialA = createJadeMaterial(state.stone, jadeTexture, [], 1, true);
-  const faceMaterialB = createJadeMaterial(state.stone, jadeTexture, [], 1, true);
+  const faceMaterialA = createCutFaceMaterial(state.stone, jadeTexture);
+  const faceMaterialB = createCutFaceMaterial(state.stone, jadeTexture);
   const capA = createFaceAssembly(faceGeo, faceMaterialA, points, quaternion, position);
   const capB = createFaceAssembly(faceGeo, faceMaterialB, points, quaternion, position);
 
-  const innerA = new THREE.Mesh(
-    geometry,
-    createJadeMaterial(state.stone, jadeTexture, [planeA], .68)
-  );
-  const innerB = new THREE.Mesh(
-    geometry,
-    createJadeMaterial(state.stone, jadeTexture, [planeB], .68)
-  );
-  innerA.scale.setScalar(.91);
-  innerB.scale.setScalar(.91);
-  innerA.renderOrder = innerB.renderOrder = 1;
-
   const halfA = new THREE.Group();
   const halfB = new THREE.Group();
-  halfA.add(innerA, rockA, capA.assembly);
-  halfB.add(innerB, rockB, capB.assembly);
+  halfA.add(rockA, capA.assembly);
+  halfB.add(rockB, capB.assembly);
 
   const faceLightA = new THREE.PointLight(0x25e7a2, 3.2 + state.stone.water * 4, 3.4, 1.8);
   const faceLightB = faceLightA.clone();
@@ -648,10 +633,10 @@ function buildHalves(jadeTexture = null) {
   group.visible = false;
   stoneRoot.add(group);
   halves = {
-    group, halfA, halfB, rockA, rockB, innerA, innerB,
+    group, halfA, halfB, rockA, rockB,
     faceA: capA.face, faceB: capB.face,
     glowA: capA.glow, glowB: capB.glow,
-    planeA, planeB, normal, position, radius, jadeTexture
+    planeA, planeB, planeBNormal, normal, position, radius, jadeTexture
   };
 }
 
@@ -1072,14 +1057,15 @@ function animateCut(time) {
     );
     state.split = presentation.axialDistance;
     halves.presentationTangent = presentation.tangent;
+    halves.halfA.quaternion.identity();
     halves.halfA.position.copy(presentation.halfA);
-    halves.halfB.position.copy(presentation.halfB);
-    const posA = halves.position.clone().addScaledVector(halves.normal, presentation.axialDistance);
-    const posB = halves.position.clone().addScaledVector(halves.normal, -presentation.axialDistance);
-    setWorldClippingPlane(halves.planeA, halves.normal, posA);
-    setWorldClippingPlane(halves.planeB, halves.normal.clone().negate(), posB);
+    halves.halfB.quaternion.setFromAxisAngle(presentation.tangent, Math.PI * displayProgress);
+    const rotatedPivot = halves.position.clone().applyQuaternion(halves.halfB.quaternion);
+    halves.halfB.position.copy(presentation.halfB).add(halves.position).sub(rotatedPivot);
+    setWorldPlaneFromLocal(halves.planeA, halves.normal, halves.position, halves.halfA);
+    setWorldPlaneFromLocal(halves.planeB, halves.planeBNormal, halves.position, halves.halfB);
     const reveal = THREE.MathUtils.smoothstep(p, .72, .94);
-    halves.faceA.material.emissiveIntensity = (.5 + state.stone.water * .7) * (1 + reveal * .42);
+    halves.faceA.material.emissiveIntensity = .32 + state.stone.water * .22 + reveal * .18;
     halves.faceB.material.emissiveIntensity = halves.faceA.material.emissiveIntensity;
     halves.glowA.material.opacity = halves.glowB.material.opacity = .1 + reveal * .18;
   }

@@ -108,6 +108,19 @@ export function setWorldPlaneFromLocal(target, localNormal, localPoint, object) 
   return target;
 }
 
+/** Map cut-plane local coordinates to the same square sampled by JadeVolume. */
+export function applyPlanarCutUVs(geometry, extent = 2.4) {
+  const position = geometry.getAttribute('position');
+  const uv = new Float32Array(position.count * 2);
+  const scale = 1 / (extent * 2);
+  for (let index = 0; index < position.count; index++) {
+    uv[index * 2] = THREE.MathUtils.clamp(position.getX(index) * scale + .5, 0, 1);
+    uv[index * 2 + 1] = THREE.MathUtils.clamp(position.getY(index) * scale + .5, 0, 1);
+  }
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return geometry;
+}
+
 export function computeCutPresentation(normal, radius, axialProgress, displayProgress, singleFace = false) {
   const tangent = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), normal);
   if (tangent.lengthSq() < 1e-6) tangent.crossVectors(new THREE.Vector3(1, 0, 0), normal);
