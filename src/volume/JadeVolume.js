@@ -66,6 +66,8 @@ export class JadeVolume {
     // Reusable vectors for sample() hot path
     this._tmp = new THREE.Vector3();
     this._tmp2 = new THREE.Vector3();
+    this._sampleResult = { density: 0, water: 0, color: 0, cotton: 0, crack: 0 };
+    this._rgbResult = { r: 0, g: 0, b: 0 };
   }
 
   /**
@@ -75,7 +77,8 @@ export class JadeVolume {
    * @param {boolean} [fast=false]  fewer noise octaves for preview
    * @returns {{ density: number, water: number, color: number, cotton: number, crack: number }}
    */
-  sample(position, fast = false) {
+  sample(position, fast = false, target = null) {
+    const result = target ?? { density: 0, water: 0, color: 0, cotton: 0, crack: 0 };
     const x = position.x;
     const y = position.y;
     const z = position.z;
@@ -90,7 +93,8 @@ export class JadeVolume {
     const density = THREE.MathUtils.smoothstep(surface + 0.18, surface - 0.25, r);
 
     if (density < 0.01) {
-      return { density: 0, water: 0, color: 0, cotton: 0, crack: 0 };
+      result.density = result.water = result.color = result.cotton = result.crack = 0;
+      return result;
     }
 
     // --- Water ---
@@ -135,7 +139,66 @@ export class JadeVolume {
     }
     crack = THREE.MathUtils.clamp(crack * p.crack, 0, 1);
 
-    return { density, water, color, cotton, crack };
+    result.density = density;
+    result.water = water;
+    result.color = color;
+    result.cotton = cotton;
+    result.crack = crack;
+    return result;
+  }
+
+  /**
+   * Generate raw RGBA pixels without touching DOM/canvas APIs. This method is
+   * worker-safe and avoids allocating result/color objects for every pixel.
+   */
+  generateCutTextureData(normal, center, size = 256, extent = 2.4, opts = {}) {
+    const fast = opts.fast === true;
+    const data = new Uint8Array(size * size * 4);
+    const n = normal.clone().normalize();
+    const up = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const tangent = new THREE.Vector3().crossVectors(up, n).normalize();
+    const bitangent = new THREE.Vector3().crossVectors(n, tangent).normalize();
+    const pos = new THREE.Vector3();
+    const sample = this._sampleResult;
+    const rgb = this._rgbResult;
+    const invSize = 1 / (size - 1);
+
+    for (let j = 0; j < size; j++) {
+      const v = (j * invSize - 0.5) * 2 * extent;
+      for (let i = 0; i < size; i++) {
+        const u = (i * invSize - 0.5) * 2 * extent;
+        pos.copy(center).addScaledVector(tangent, u).addScaledVector(bitangent, v);
+        this.sample(pos, fast, sample);
+        const idx = (j * size + i) * 4;
+
+        if (sample.density < 0.05) {
+          data[idx] = 8;
+          data[idx + 1] = 14;
+          data[idx + 2] = 12;
+          data[idx + 3] = 0;
+          continue;
+        }
+
+        const hue = 145 + sample.color * 28;
+        const sat = 55 + sample.color * 30;
+        const light = 14 + sample.water * 38 - sample.cotton * 12;
+        hslToRgb(hue / 360, sat / 100, light / 100, rgb);
+        const crackDark = 1 - sample.crack * 0.72;
+        data[idx] = Math.round(rgb.r * 255 * crackDark);
+        data[idx + 1] = Math.round(rgb.g * 255 * crackDark);
+        data[idx + 2] = Math.round(rgb.b * 255 * crackDark);
+        data[idx + 3] = Math.round(220 + sample.water * 35);
+
+        if (sample.cotton > 0.35) {
+          const veil = (sample.cotton - 0.35) * 0.45;
+          data[idx] = Math.min(255, data[idx] + veil * 40);
+          data[idx + 1] = Math.min(255, data[idx + 1] + veil * 55);
+          data[idx + 2] = Math.min(255, data[idx + 2] + veil * 35);
+        }
+      }
+    }
+
+    return { data, tangent, bitangent, normal: n };
   }
 
   /**
@@ -164,62 +227,14 @@ export class JadeVolume {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;
     const ctx = canvas.getContext('2d', { willReadFrequently: false });
-    const img = ctx.createImageData(size, size);
-
-    // Orthonormal basis on the cut plane
-    const n = normal.clone().normalize();
-    let up = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-    const tangent = new THREE.Vector3().crossVectors(up, n).normalize();
-    const bitangent = new THREE.Vector3().crossVectors(n, tangent).normalize();
-
-    const pos = new THREE.Vector3();
-    const invSize = 1 / (size - 1);
-
-    for (let j = 0; j < size; j++) {
-      const v = (j * invSize - 0.5) * 2 * extent;
-      for (let i = 0; i < size; i++) {
-        const u = (i * invSize - 0.5) * 2 * extent;
-
-        pos.copy(center)
-          .addScaledVector(tangent, u)
-          .addScaledVector(bitangent, v);
-
-        const s = this.sample(pos, fast);
-        const idx = (j * size + i) * 4;
-
-        if (s.density < 0.05) {
-          img.data[idx] = 8;
-          img.data[idx + 1] = 14;
-          img.data[idx + 2] = 12;
-          img.data[idx + 3] = 0;
-          continue;
-        }
-
-        const hue = 145 + s.color * 28;
-        const sat = 55 + s.color * 30;
-        const light = 14 + s.water * 38 - s.cotton * 12;
-        const rgb = hslToRgb(hue / 360, sat / 100, light / 100);
-
-        const crackDark = 1 - s.crack * 0.72;
-        img.data[idx] = Math.round(rgb.r * 255 * crackDark);
-        img.data[idx + 1] = Math.round(rgb.g * 255 * crackDark);
-        img.data[idx + 2] = Math.round(rgb.b * 255 * crackDark);
-        img.data[idx + 3] = Math.round(220 + s.water * 35);
-
-        if (s.cotton > 0.35) {
-          const veil = (s.cotton - 0.35) * 0.45;
-          img.data[idx] = Math.min(255, img.data[idx] + veil * 40);
-          img.data[idx + 1] = Math.min(255, img.data[idx + 1] + veil * 55);
-          img.data[idx + 2] = Math.min(255, img.data[idx + 2] + veil * 35);
-        }
-      }
-    }
+    const generated = this.generateCutTextureData(normal, center, size, extent, { fast });
+    const img = new ImageData(new Uint8ClampedArray(generated.data.buffer), size, size);
 
     ctx.putImageData(img, 0, 0);
 
     // Crack lines only for high-quality final texture
     if (!fast) {
-      this._drawCrackLines(ctx, size, extent, tangent, bitangent, center, n);
+      this._drawCrackLines(ctx, size, extent, generated.tangent, generated.bitangent, center, generated.normal);
     }
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -276,7 +291,7 @@ export class JadeVolume {
 }
 
 /** Minimal HSL → RGB helper */
-function hslToRgb(h, s, l) {
+function hslToRgb(h, s, l, target = { r: 0, g: 0, b: 0 }) {
   let r, g, b;
   if (s === 0) {
     r = g = b = l;
@@ -295,5 +310,8 @@ function hslToRgb(h, s, l) {
     g = hue2rgb(p, q, h);
     b = hue2rgb(p, q, h - 1 / 3);
   }
-  return { r, g, b };
+  target.r = r;
+  target.g = g;
+  target.b = b;
+  return target;
 }
