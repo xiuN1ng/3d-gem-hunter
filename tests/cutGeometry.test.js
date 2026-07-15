@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
 
 function pointSegmentDistanceSquared(point, a, b) {
   const edge = b.clone().sub(a);
@@ -79,4 +79,15 @@ test('mobile cut presentation keeps the primary face centered', () => {
   const presentation = computeCutPresentation(normal, 2, 1, 1, true);
   assert.ok(Math.abs(presentation.halfA.dot(presentation.tangent)) < 1e-10);
   assert.ok(presentation.halfB.dot(presentation.tangent) > 2.6);
+});
+
+test('cut face UVs map the sampled volume extent into the complete texture', () => {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    -2.4, -2.4, 0,
+    0, 0, 0,
+    2.4, 2.4, 0
+  ], 3));
+  applyPlanarCutUVs(geometry, 2.4);
+  assert.deepEqual([...geometry.attributes.uv.array], [0, 0, .5, .5, 1, 1]);
 });
