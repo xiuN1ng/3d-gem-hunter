@@ -236,6 +236,7 @@ kbd { min-width: 35px; padding: 3px 6px; text-align: center; border: 1px solid #
   .game-shell { height: 656px; }
   .viewport-wrap { overflow: hidden; }
   .panel { top: auto; bottom: 8px; height: 242px; width: calc(50% - 12px); padding: 11px; }
+  .panel, .scene-tag { backdrop-filter: none; }
   .info-panel { left: 8px; }
   .control-panel { right: 8px; }
   .stone-stats > div { min-height: 29px; }
