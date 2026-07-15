@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { applyPlanarCutUVs, computeCutPresentation, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, computeFaceForwardTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import { createSeasonStats, createSupplierInventory, finishReason, SEASON_DAYS, STARTING_MONEY } from './game/season.js';
@@ -566,7 +566,9 @@ function createCutFaceMaterial(profile, texture) {
     opacity: 1,
     side: THREE.DoubleSide,
     depthWrite: true,
-    depthTest: true,
+    // The mesh has exactly the cap silhouette, so drawing it over the opaque cap
+    // cannot leak onto the shell and guarantees that the inspection spot is visible.
+    depthTest: false,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1
@@ -696,7 +698,8 @@ function buildHalves(jadeTexture = null) {
     group, halfA, halfB, rockA, rockB,
     faceA: capA.face, faceB: capB.face,
     glowA: capA.glow, glowB: capB.glow,
-    planeA, planeB, planeBNormal, normal, position, radius, jadeTexture
+    planeA, planeB, planeBNormal, normal, position, radius, jadeTexture,
+    stoneQuaternionAtCut: stoneRoot.quaternion.clone()
   };
 }
 
@@ -1233,11 +1236,30 @@ function animateCut(time) {
     );
     state.split = presentation.axialDistance;
     halves.presentationTangent = presentation.tangent;
-    halves.halfA.quaternion.identity();
-    halves.halfA.position.copy(presentation.halfA);
-    halves.halfB.quaternion.setFromAxisAngle(presentation.tangent, Math.PI * displayProgress);
-    const rotatedPivot = halves.position.clone().applyQuaternion(halves.halfB.quaternion);
-    halves.halfB.position.copy(presentation.halfB).add(halves.position).sub(rotatedPivot);
+    const displayNormal = new THREE.Vector3(0, 0, 1);
+    const faceA = computeFaceForwardTransform(
+      halves.normal,
+      halves.position,
+      presentation.halfA,
+      displayProgress,
+      displayNormal
+    );
+    const faceB = computeFaceForwardTransform(
+      halves.planeBNormal,
+      halves.position,
+      presentation.halfB,
+      displayProgress,
+      displayNormal
+    );
+    halves.halfA.quaternion.copy(faceA.quaternion);
+    halves.halfA.position.copy(faceA.position);
+    halves.halfB.quaternion.copy(faceB.quaternion);
+    halves.halfB.position.copy(faceB.position);
+    stoneRoot.quaternion.slerpQuaternions(
+      halves.stoneQuaternionAtCut,
+      new THREE.Quaternion(),
+      displayProgress
+    );
     setWorldPlaneFromLocal(halves.planeA, halves.normal, halves.position, halves.halfA);
     setWorldPlaneFromLocal(halves.planeB, halves.planeBNormal, halves.position, halves.halfB);
     const reveal = THREE.MathUtils.smoothstep(p, .72, .94);

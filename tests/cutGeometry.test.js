@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { applyPlanarCutUVs, computeCutPresentation, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, computeFaceForwardTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
 
 function pointSegmentDistanceSquared(point, a, b) {
   const edge = b.clone().sub(a);
@@ -98,4 +98,18 @@ test('rear cut cap reverses its surface normal before the half is turned', () =>
   reverseTriangleWinding(geometry);
   assert.ok(before > 0);
   assert.ok(geometry.attributes.normal.getZ(0) < 0);
+});
+
+test('showroom transform makes both outward cut normals face the camera without moving their centers', () => {
+  const normal = new THREE.Vector3(.72, -.23, .65).normalize();
+  const pivot = normal.clone().multiplyScalar(.37);
+  const translations = [new THREE.Vector3(-1.8, .2, .48), new THREE.Vector3(1.8, .2, -.48)];
+
+  for (const [surfaceNormal, translation] of [[normal, translations[0]], [normal.clone().negate(), translations[1]]]) {
+    const transform = computeFaceForwardTransform(surfaceNormal, pivot, translation);
+    const displayedNormal = surfaceNormal.clone().applyQuaternion(transform.quaternion);
+    const displayedCenter = pivot.clone().applyQuaternion(transform.quaternion).add(transform.position);
+    assert.ok(displayedNormal.distanceTo(new THREE.Vector3(0, 0, 1)) < 1e-10);
+    assert.ok(displayedCenter.distanceTo(pivot.clone().add(translation)) < 1e-10);
+  }
 });
