@@ -117,15 +117,20 @@ try {
   const cdp = await connectCdp(target.webSocketDebuggerUrl);
   await cdp.send('Runtime.enable');
   const result = await waitFor(async () => {
-    const response = await cdp.send('Runtime.evaluate', {
-      expression: `({
-        state: document.documentElement.dataset.perfTest || null,
-        result: document.querySelector('#perf-result')?.textContent || null,
-        title: document.title
-      })`,
-      returnByValue: true
-    });
-    return response.result.value.state ? response.result.value : null;
+    try {
+      const response = await cdp.send('Runtime.evaluate', {
+        expression: `({
+          state: document.documentElement.dataset.perfTest || null,
+          result: document.querySelector('#perf-result')?.textContent || null,
+          title: document.title
+        })`,
+        returnByValue: true
+      });
+      const value = response.result?.value;
+      return value?.state ? value : null;
+    } catch {
+      return null;
+    }
   }, 30000, 'Mobile WebGL performance page did not finish within 30 seconds.');
 
   cdp.socket.close();
