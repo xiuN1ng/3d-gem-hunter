@@ -26,5 +26,5 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Build production bundle
-        run: npm run build
+      - name: Test and validate production bundle
+        run: npm run validate

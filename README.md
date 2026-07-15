@@ -39,6 +39,12 @@ npm run build
 npm run preview
 ```
 
+提交前完整验证（测试、生产构建与包体积预算）：
+
+```bash
+npm run validate
+```
+
 ## 自动发布
 
 - Pull Request 和非 `main` 分支只执行生产构建验证。

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
-import { JadeVolume } from './volume/JadeVolume.js';
+import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality } from './performancePolicy.js';
 import './style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -35,10 +35,13 @@ const state = {
   hasPaidCurrent: true
 };
 
-const mobileQuality = window.matchMedia('(pointer: coarse)').matches || Math.min(window.innerWidth, window.innerHeight) < 760;
-const renderProfile = mobileQuality
-  ? { pixelRatio: 1, cutTextureSize: 256, transmissionScale: .5, targetFps: 60 }
-  : { pixelRatio: 1.5, cutTextureSize: 384, transmissionScale: .75, targetFps: 60 };
+const mobileQuality = detectMobileQuality({
+  coarsePointer: window.matchMedia('(pointer: coarse)').matches,
+  width: window.innerWidth,
+  height: window.innerHeight,
+  deviceMemory: navigator.deviceMemory ?? 8
+});
+const renderProfile = createRenderProfile(mobileQuality);
 
 class CutTextureWorkerClient {
   constructor() {
@@ -60,6 +63,8 @@ class CutTextureWorkerClient {
     this.worker?.addEventListener('error', (error) => {
       for (const request of this.pending.values()) request.reject(error);
       this.pending.clear();
+      this.worker?.terminate();
+      this.worker = null;
     });
     return this.worker;
   }
@@ -86,6 +91,13 @@ class CutTextureWorkerClient {
         fast: mobileQuality
       });
     });
+  }
+
+  dispose() {
+    for (const request of this.pending.values()) request.reject(new Error('Cut texture worker disposed'));
+    this.pending.clear();
+    this.worker?.terminate();
+    this.worker = null;
   }
 }
 
@@ -166,7 +178,7 @@ function makeStoneProfile(seed) {
 const renderer = new THREE.WebGLRenderer({ antialias: !mobileQuality, alpha: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, renderProfile.pixelRatio));
 renderer.setSize(sceneHost.clientWidth, sceneHost.clientHeight);
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = !mobileQuality;
 renderer.shadowMap.type = mobileQuality ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 renderer.transmissionResolutionScale = renderProfile.transmissionScale;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -226,13 +238,13 @@ function createStudio() {
 
   const pedestalMat = new THREE.MeshStandardMaterial({ color: 0x101916, metalness: .78, roughness: .32 });
   const goldMat = new THREE.MeshStandardMaterial({ color: 0x6f5a32, metalness: .88, roughness: .28 });
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(3.15, 3.45, .48, 72), pedestalMat);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(3.15, 3.45, .48, renderProfile.studioSegments), pedestalMat);
   base.position.y = -1.91;
   base.receiveShadow = true;
   base.castShadow = true;
   group.add(base);
 
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.72, .075, 10, 96), goldMat);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.72, .075, 8, renderProfile.studioSegments), goldMat);
   ring.rotation.x = Math.PI / 2;
   ring.position.y = -1.62;
   group.add(ring);
@@ -274,7 +286,7 @@ function createStudio() {
 createStudio();
 
 function makeRockTexture(seed) {
-  const size = 256;
+  const size = renderProfile.rockTextureSize;
   const data = new Uint8Array(size * size * 4);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -297,7 +309,7 @@ function makeRockTexture(seed) {
 }
 
 function makeRockGeometry(seed) {
-  const geometry = new THREE.IcosahedronGeometry(2.18, 5);
+  const geometry = new THREE.IcosahedronGeometry(2.18, renderProfile.rockGeometryDetail);
   const pos = geometry.attributes.position;
   const colors = [];
   const direction = new THREE.Vector3();
@@ -464,7 +476,6 @@ let previewGroup = null;
 let halves = null;
 let cuttingFX = null;
 let cameraTween = null;
-let currentVolume = null; // Phase 1: internal jade volume
 let stoneResources = null;
 
 function disposeObject(object, options = {}) {
@@ -549,7 +560,7 @@ function buildPreviewPlane() {
 function createCutFX(radius, normal, position) {
   const group = new THREE.Group();
   const random = mulberry32(state.stone.seed + 551);
-  const count = 360;
+  const count = renderProfile.particleCount;
   const positions = new Float32Array(count * 3);
   const speeds = [];
   const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
@@ -587,7 +598,7 @@ function createJadeMaterial(profile, texture, clippingPlanes = [], boost = 1) {
     metalness: 0,
     clearcoat: 1,
     clearcoatRoughness: .06,
-    transmission: .34 + profile.water * .36,
+    transmission: (.34 + profile.water * .36) * renderProfile.transmissionFactor,
     thickness: 1.55,
     ior: 1.56,
     attenuationColor: new THREE.Color(0x08714d),
@@ -657,9 +668,7 @@ function buildHalves(jadeTexture = null) {
   const faceGeo = new THREE.ShapeGeometry(shape);
 
   // Phase 1: use volumetric sampling for cut face texture
-  jadeTexture ??= currentVolume
-    ? currentVolume.generateCutTexture(normal, position, renderProfile.cutTextureSize, 2.4, { fast: mobileQuality })
-    : makeJadeTexture(state.stone);
+  jadeTexture ??= makeJadeTexture(state.stone);
 
   const faceMaterialA = createJadeMaterial(state.stone, jadeTexture);
   const faceMaterialB = createJadeMaterial(state.stone, jadeTexture);
@@ -701,16 +710,12 @@ function buildHalves(jadeTexture = null) {
 }
 
 function buildStone(profile) {
-  currentVolume?.dispose();
   if (stoneRoot) disposeObject(stoneRoot);
   halves = null;
   stoneResources = null;
   stoneRoot = new THREE.Group();
   stoneRoot.position.y = .24;
   scene.add(stoneRoot);
-
-  // Phase 1: create internal volume for this stone
-  currentVolume = new JadeVolume(profile);
 
   const geometry = makeRockGeometry(profile.seed);
   stoneResources = { geometry, rockTexture: makeRockTexture(profile.seed) };
@@ -861,13 +866,20 @@ async function prepareCutTexture(normal, position) {
     return createWorkerTexture(generated);
   } catch (error) {
     console.warn('Cut texture worker failed; using synchronous fallback.', error);
-    return currentVolume.generateCutTexture(
-      normal,
-      position,
-      renderProfile.cutTextureSize,
-      2.4,
-      { fast: mobileQuality }
-    );
+    const { JadeVolume } = await import('./volume/JadeVolume.js');
+    const fallbackVolume = new JadeVolume(state.stone);
+    try {
+      const generated = fallbackVolume.generateCutTextureData(
+        normal,
+        position,
+        renderProfile.cutTextureSize,
+        2.4,
+        { fast: mobileQuality }
+      );
+      return createWorkerTexture({ data: generated.data, size: renderProfile.cutTextureSize });
+    } finally {
+      fallbackVolume.dispose();
+    }
   }
 }
 
@@ -1034,20 +1046,17 @@ function resize() {
 }
 
 window.addEventListener('resize', resize);
+window.addEventListener('pagehide', () => cutTextureWorker.dispose(), { once: true });
 
 let lastRenderedAt = 0;
-let mobileTargetFps = renderProfile.targetFps;
-let slowMobileFrames = 0;
+const frameBudget = new AdaptiveFrameBudget({ targetFps: renderProfile.targetFps });
 function animate(time) {
   requestAnimationFrame(animate);
-  if (mobileQuality && time - lastRenderedAt < 1000 / mobileTargetFps - 1) return;
+  if (mobileQuality && !frameBudget.shouldRender(time, lastRenderedAt)) return;
   lastRenderedAt = time;
   const delta = Math.min(.05, (time - state.lastTime) / 1000);
   state.lastTime = time;
-  if (mobileQuality && mobileTargetFps === 60) {
-    slowMobileFrames = delta > .022 ? slowMobileFrames + 1 : Math.max(0, slowMobileFrames - 2);
-    if (slowMobileFrames > 45) mobileTargetFps = 30;
-  }
+  if (mobileQuality) frameBudget.observe(delta * 1000);
   controls.update();
   if (stoneRoot && state.phase === 'inspect') stoneRoot.rotation.y += delta * .045;
   if (previewGroup && state.phase === 'inspect') {
