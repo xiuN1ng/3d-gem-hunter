@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
-import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality } from './performancePolicy.js';
+import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import './style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -31,6 +31,7 @@ const state = {
   stone: null,
   phase: 'inspect',
   cutProgress: 0,
+  cutStartedAt: 0,
   split: 0,
   lastTime: performance.now(),
   hasPaidCurrent: true
@@ -911,6 +912,7 @@ async function startCut() {
 
   buildHalves(jadeTexture);
   state.phase = 'cutting';
+  state.cutStartedAt = performance.now();
   ui.sceneState.textContent = '金刚砂轮运转中';
   cuttingFX = createCutFX(halves.radius, halves.normal, halves.position);
   startCutSound();
@@ -990,8 +992,8 @@ window.addEventListener('keydown', (event) => {
 });
 window.addEventListener('keyup', (event) => { if (event.key === 'Shift') controls.rotateSpeed = 1; });
 
-function animateCut(delta) {
-  state.cutProgress = Math.min(1, state.cutProgress + delta / 3.7);
+function animateCut(time) {
+  state.cutProgress = timelineProgress(time, state.cutStartedAt, 3700);
   const p = state.cutProgress;
   const percent = Math.round(p * 100);
   ui.cutProgressBar.style.width = `${percent}%`;
@@ -1066,7 +1068,7 @@ function animate(time) {
     const shimmer = .055 + Math.sin(time * .003) * .018;
     previewGroup.children[0].material.opacity = shimmer;
   }
-  if (state.phase === 'cutting') animateCut(delta);
+  if (state.phase === 'cutting') animateCut(time);
   updateCameraTween(time);
   jadeLight.intensity = 16 + Math.sin(time * .0018) * 2.5;
   renderer.render(scene, camera);

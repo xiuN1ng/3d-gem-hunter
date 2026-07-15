@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality } from '../src/performancePolicy.js';
+import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from '../src/performancePolicy.js';
 
 test('quality detection includes viewport, pointer and memory pressure', () => {
   assert.equal(detectMobileQuality({ width: 1200, height: 800, deviceMemory: 8 }), false);
@@ -28,4 +28,10 @@ test('adaptive frame budget degrades only after sustained slow frames', () => {
   assert.equal(budget.targetFps, 30);
   assert.equal(budget.shouldRender(20, 0), false);
   assert.equal(budget.shouldRender(34, 0), true);
+});
+
+test('cut timeline progress is independent from rendered frame count', () => {
+  assert.equal(timelineProgress(1000, 1000, 3700), 0);
+  assert.equal(timelineProgress(2850, 1000, 3700), .5);
+  assert.equal(timelineProgress(8000, 1000, 3700), 1);
 });

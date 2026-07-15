@@ -33,6 +33,11 @@ export function createRenderProfile(mobile) {
       };
 }
 
+export function timelineProgress(time, startedAt, durationMs) {
+  if (durationMs <= 0) return 1;
+  return Math.max(0, Math.min(1, (time - startedAt) / durationMs));
+}
+
 export class AdaptiveFrameBudget {
   constructor({ targetFps = 60, fallbackFps = 30, slowFrameMs = 22, slowFrameLimit = 45 } = {}) {
     this.targetFps = targetFps;
