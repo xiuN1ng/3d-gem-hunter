@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { intersectGeometryWithPlane, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
+import { computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
 
 function pointSegmentDistanceSquared(point, a, b) {
   const edge = b.clone().sub(a);
@@ -63,4 +63,20 @@ test('local clipping plane stays aligned after object rotation and translation',
 
   assert.ok(Math.abs(worldPlane.distanceToPoint(worldPoint)) < 1e-10);
   assert.ok(1 - worldPlane.normal.dot(worldNormal) < 1e-10);
+});
+
+test('desktop cut presentation separates both faces inside the cut plane', () => {
+  const normal = new THREE.Vector3(.2, -.1, .97).normalize();
+  const presentation = computeCutPresentation(normal, 2, 1, 1, false);
+  assert.ok(Math.abs(presentation.tangent.dot(normal)) < 1e-10);
+  assert.ok(presentation.halfA.distanceTo(presentation.halfB) > 3.6);
+  assert.ok(presentation.halfA.dot(presentation.tangent) < 0);
+  assert.ok(presentation.halfB.dot(presentation.tangent) > 0);
+});
+
+test('mobile cut presentation keeps the primary face centered', () => {
+  const normal = new THREE.Vector3(.2, -.1, .97).normalize();
+  const presentation = computeCutPresentation(normal, 2, 1, 1, true);
+  assert.ok(Math.abs(presentation.halfA.dot(presentation.tangent)) < 1e-10);
+  assert.ok(presentation.halfB.dot(presentation.tangent) > 2.6);
 });

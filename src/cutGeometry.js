@@ -107,3 +107,21 @@ export function setWorldPlaneFromLocal(target, localNormal, localPoint, object) 
   target.setFromNormalAndCoplanarPoint(worldNormal, worldPoint);
   return target;
 }
+
+export function computeCutPresentation(normal, radius, axialProgress, displayProgress, singleFace = false) {
+  const tangent = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), normal);
+  if (tangent.lengthSq() < 1e-6) tangent.crossVectors(new THREE.Vector3(1, 0, 0), normal);
+  tangent.normalize();
+
+  const axialDistance = .48 * axialProgress;
+  const lateralDistance = radius * (singleFace ? 1.35 : .92) * displayProgress;
+  const halfA = normal.clone().multiplyScalar(axialDistance);
+  const halfB = normal.clone().multiplyScalar(-axialDistance);
+  if (singleFace) {
+    halfB.addScaledVector(tangent, lateralDistance);
+  } else {
+    halfA.addScaledVector(tangent, -lateralDistance);
+    halfB.addScaledVector(tangent, lateralDistance);
+  }
+  return { tangent, halfA, halfB, axialDistance, lateralDistance };
+}
