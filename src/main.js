@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { applyPlanarCutUVs, computeCutPresentation, computeFaceForwardTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, computeShowcaseTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import { createSeasonStats, createSupplierInventory, finishReason, SEASON_DAYS, STARTING_MONEY } from './game/season.js';
@@ -566,9 +566,9 @@ function createCutFaceMaterial(profile, texture) {
     opacity: 1,
     side: THREE.DoubleSide,
     depthWrite: true,
-    // The mesh has exactly the cap silhouette, so drawing it over the opaque cap
-    // cannot leak onto the shell and guarantees that the inspection spot is visible.
-    depthTest: false,
+    // The cap must participate in depth testing: the shell should never be visible
+    // through it when the display assembly rotates toward the viewer.
+    depthTest: true,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1
@@ -659,8 +659,11 @@ function buildHalves(jadeTexture = null) {
   const group = new THREE.Group();
   const normal = cutNormal(state.angle);
   const position = cutPosition(state.angle, state.depth);
-  const planeA = setWorldClippingPlane(new THREE.Plane(), normal, position);
-  const planeBNormal = normal.clone().negate();
+  // Keep each physical half behind its exposed cap. Half A occupies -normal;
+  // half B occupies +normal and is turned around the tangent during display.
+  const planeANormal = normal.clone().negate();
+  const planeA = setWorldClippingPlane(new THREE.Plane(), planeANormal, position);
+  const planeBNormal = normal.clone();
   const planeB = setWorldClippingPlane(new THREE.Plane(), planeBNormal, position);
 
   const geometry = wholeRock.geometry;
@@ -698,8 +701,8 @@ function buildHalves(jadeTexture = null) {
     group, halfA, halfB, rockA, rockB,
     faceA: capA.face, faceB: capB.face,
     glowA: capA.glow, glowB: capB.glow,
-    planeA, planeB, planeBNormal, normal, position, radius, jadeTexture,
-    stoneQuaternionAtCut: stoneRoot.quaternion.clone()
+    planeA, planeB, planeANormal, planeBNormal, capNormalB: normal.clone().negate(), normal, position, radius, jadeTexture,
+    showcase: null
   };
 }
 
@@ -791,14 +794,31 @@ function applyInspectionLight(updateUi = true) {
     light.color.copy(lightColor);
     light.intensity = lightIntensity;
   }
-  inspectionLights[0].position.copy(halves.position)
-    .addScaledVector(halves.normal, 1.18)
-    .addScaledVector(tangent, x * halves.radius * .72)
-    .addScaledVector(bitangent, y * halves.radius * .72);
-  inspectionLights[1].position.copy(halves.position)
-    .addScaledVector(halves.normal, -1.18)
-    .addScaledVector(tangent, x * halves.radius * .72)
-    .addScaledVector(bitangent, y * halves.radius * .72);
+  const placeLightOnRootPoint = (light, half, rootPoint) => {
+    light.position.copy(rootPoint)
+      .sub(half.position)
+      .applyQuaternion(half.quaternion.clone().invert());
+  };
+  const faceCenter = (half) => half.position.clone()
+    .add(halves.position.clone().applyQuaternion(half.quaternion));
+  const faceNormalA = halves.normal.clone().applyQuaternion(halves.halfA.quaternion).normalize();
+  const faceNormalB = halves.capNormalB.clone().applyQuaternion(halves.halfB.quaternion).normalize();
+  const faceTangentA = tangent.clone().applyQuaternion(halves.halfA.quaternion).normalize();
+  const faceTangentB = tangent.clone().applyQuaternion(halves.halfB.quaternion).normalize();
+  const faceBitangentA = bitangent.clone().applyQuaternion(halves.halfA.quaternion).normalize();
+  const faceBitangentB = bitangent.clone().applyQuaternion(halves.halfB.quaternion).normalize();
+  const faceLightPointA = faceCenter(halves.halfA)
+    .addScaledVector(faceNormalA, .78)
+    .addScaledVector(faceTangentA, x * halves.radius * .72)
+    .addScaledVector(faceBitangentA, y * halves.radius * .72);
+  const faceLightPointB = faceCenter(halves.halfB)
+    .addScaledVector(faceNormalB, .78)
+    .addScaledVector(faceTangentB, x * halves.radius * .72)
+    .addScaledVector(faceBitangentB, y * halves.radius * .72);
+  // Both halves are turned so their exposed caps face the same direction. Each
+  // light is placed at its own cap centre, then converted into local coordinates.
+  placeLightOnRootPoint(inspectionLights[0], halves.halfA, faceLightPointA);
+  placeLightOnRootPoint(inspectionLights[1], halves.halfB, faceLightPointB);
 
   for (const face of [halves.faceA, halves.faceB]) {
     face.material.emissiveIntensity = .18 + settings.translucency * .28;
@@ -1060,11 +1080,8 @@ function focusCutSurface() {
   const centerA = halves.faceA.getWorldPosition(new THREE.Vector3());
   const centerB = halves.faceB.getWorldPosition(new THREE.Vector3());
   const worldFocus = mobileQuality ? centerA : centerA.clone().add(centerB).multiplyScalar(.5);
-  const referenceNormal = halves.normal.clone().applyQuaternion(stoneRoot.getWorldQuaternion(new THREE.Quaternion())).normalize();
   const normalA = new THREE.Vector3(0, 0, 1).applyQuaternion(halves.faceA.getWorldQuaternion(new THREE.Quaternion())).normalize();
   const normalB = new THREE.Vector3(0, 0, -1).applyQuaternion(halves.faceB.getWorldQuaternion(new THREE.Quaternion())).normalize();
-  if (normalA.dot(referenceNormal) < 0) normalA.negate();
-  if (normalB.dot(referenceNormal) < 0) normalB.negate();
   const worldNormal = mobileQuality ? normalA : normalA.add(normalB).normalize();
   const framingTarget = worldFocus.clone().add(new THREE.Vector3(0, mobileQuality ? -.72 : -.48, 0));
   const distance = mobileQuality
@@ -1236,31 +1253,31 @@ function animateCut(time) {
     );
     state.split = presentation.axialDistance;
     halves.presentationTangent = presentation.tangent;
-    const displayNormal = new THREE.Vector3(0, 0, 1);
-    const faceA = computeFaceForwardTransform(
+    if (!halves.showcase) {
+      stoneRoot.updateMatrixWorld(true);
+      const pivotWorld = stoneRoot.localToWorld(halves.position.clone());
+      halves.showcase = {
+        startQuaternion: stoneRoot.quaternion.clone(),
+        pivotWorld,
+        viewerDirection: camera.position.clone().sub(pivotWorld).normalize()
+      };
+    }
+    const showcase = computeShowcaseTransform(
       halves.normal,
       halves.position,
-      presentation.halfA,
-      displayProgress,
-      displayNormal
-    );
-    const faceB = computeFaceForwardTransform(
-      halves.planeBNormal,
-      halves.position,
-      presentation.halfB,
-      displayProgress,
-      displayNormal
-    );
-    halves.halfA.quaternion.copy(faceA.quaternion);
-    halves.halfA.position.copy(faceA.position);
-    halves.halfB.quaternion.copy(faceB.quaternion);
-    halves.halfB.position.copy(faceB.position);
-    stoneRoot.quaternion.slerpQuaternions(
-      halves.stoneQuaternionAtCut,
-      new THREE.Quaternion(),
+      halves.showcase.startQuaternion,
+      halves.showcase.pivotWorld,
+      halves.showcase.viewerDirection,
       displayProgress
     );
-    setWorldPlaneFromLocal(halves.planeA, halves.normal, halves.position, halves.halfA);
+    stoneRoot.quaternion.copy(showcase.quaternion);
+    stoneRoot.position.copy(showcase.position);
+    halves.halfA.quaternion.identity();
+    halves.halfA.position.copy(presentation.halfA);
+    halves.halfB.quaternion.setFromAxisAngle(presentation.tangent, Math.PI * displayProgress);
+    const rotatedPivot = halves.position.clone().applyQuaternion(halves.halfB.quaternion);
+    halves.halfB.position.copy(presentation.halfB).add(halves.position).sub(rotatedPivot);
+    setWorldPlaneFromLocal(halves.planeA, halves.planeANormal, halves.position, halves.halfA);
     setWorldPlaneFromLocal(halves.planeB, halves.planeBNormal, halves.position, halves.halfB);
     const reveal = THREE.MathUtils.smoothstep(p, .72, .94);
     halves.faceA.material.emissiveIntensity = .32 + state.stone.water * .22 + reveal * .18;

@@ -153,14 +153,15 @@ export function computeCutPresentation(normal, radius, axialProgress, displayPro
   return { tangent, halfA, halfB, axialDistance, lateralDistance };
 }
 
-/** Rotate a cut surface around its own center so its outward normal faces the showroom camera. */
-export function computeFaceForwardTransform(surfaceNormal, pivot, translation, progress = 1, displayNormal = new THREE.Vector3(0, 0, 1)) {
-  const targetRotation = new THREE.Quaternion().setFromUnitVectors(
-    surfaceNormal.clone().normalize(),
-    displayNormal.clone().normalize()
+/** Rotate the whole stone toward a viewer while keeping the cut centre fixed in world space. */
+export function computeShowcaseTransform(surfaceNormal, pivotLocal, startQuaternion, pivotWorld, viewerDirection, progress = 1) {
+  const currentWorldNormal = surfaceNormal.clone().normalize().applyQuaternion(startQuaternion).normalize();
+  const delta = new THREE.Quaternion().setFromUnitVectors(
+    currentWorldNormal,
+    viewerDirection.clone().normalize()
   );
-  const quaternion = new THREE.Quaternion().slerp(targetRotation, THREE.MathUtils.clamp(progress, 0, 1));
-  const rotatedPivot = pivot.clone().applyQuaternion(quaternion);
-  const position = translation.clone().add(pivot).sub(rotatedPivot);
-  return { quaternion, position };
+  const targetQuaternion = delta.multiply(startQuaternion.clone());
+  const quaternion = startQuaternion.clone().slerp(targetQuaternion, THREE.MathUtils.clamp(progress, 0, 1));
+  const position = pivotWorld.clone().sub(pivotLocal.clone().applyQuaternion(quaternion));
+  return { quaternion, position, targetQuaternion };
 }

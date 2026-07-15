@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { applyPlanarCutUVs, computeCutPresentation, computeFaceForwardTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, computeShowcaseTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
 
 function pointSegmentDistanceSquared(point, a, b) {
   const edge = b.clone().sub(a);
@@ -100,16 +100,19 @@ test('rear cut cap reverses its surface normal before the half is turned', () =>
   assert.ok(geometry.attributes.normal.getZ(0) < 0);
 });
 
-test('showroom transform makes both outward cut normals face the camera without moving their centers', () => {
+test('whole-stone showcase rotation faces the viewer and keeps the cut centre fixed', () => {
   const normal = new THREE.Vector3(.72, -.23, .65).normalize();
+  const startQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(.12, -.42, .08));
+  const startPosition = new THREE.Vector3(.4, .2, -.3);
   const pivot = normal.clone().multiplyScalar(.37);
-  const translations = [new THREE.Vector3(-1.8, .2, .48), new THREE.Vector3(1.8, .2, -.48)];
-
-  for (const [surfaceNormal, translation] of [[normal, translations[0]], [normal.clone().negate(), translations[1]]]) {
-    const transform = computeFaceForwardTransform(surfaceNormal, pivot, translation);
-    const displayedNormal = surfaceNormal.clone().applyQuaternion(transform.quaternion);
-    const displayedCenter = pivot.clone().applyQuaternion(transform.quaternion).add(transform.position);
-    assert.ok(displayedNormal.distanceTo(new THREE.Vector3(0, 0, 1)) < 1e-10);
-    assert.ok(displayedCenter.distanceTo(pivot.clone().add(translation)) < 1e-10);
-  }
+  const pivotWorld = pivot.clone().applyQuaternion(startQuaternion).add(startPosition);
+  const viewerDirection = new THREE.Vector3(-.12, .18, .976).normalize();
+  const initial = computeShowcaseTransform(normal, pivot, startQuaternion, pivotWorld, viewerDirection, 0);
+  assert.ok(initial.quaternion.angleTo(startQuaternion) < 1e-10);
+  assert.ok(initial.position.distanceTo(startPosition) < 1e-10);
+  const transform = computeShowcaseTransform(normal, pivot, startQuaternion, pivotWorld, viewerDirection);
+  const displayedNormal = normal.clone().applyQuaternion(transform.quaternion);
+  const displayedPivot = pivot.clone().applyQuaternion(transform.quaternion).add(transform.position);
+  assert.ok(displayedNormal.distanceTo(viewerDirection) < 1e-10);
+  assert.ok(displayedPivot.distanceTo(pivotWorld) < 1e-10);
 });
