@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { applyPlanarCutUVs, computeCutPresentation, computeShowcaseTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, computePlatformLift, computeShowcaseTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import { createSeasonStats, createSupplierInventory, finishReason, SEASON_DAYS, STARTING_MONEY } from './game/season.js';
@@ -12,6 +12,10 @@ import './style.css';
 const $ = (selector) => document.querySelector(selector);
 const sceneHost = $('#scene');
 const CUT_TEXTURE_EXTENT = 2.4;
+const PLATFORM_BASE_CENTER_Y = -1.91;
+const PLATFORM_BASE_HEIGHT = .48;
+const PLATFORM_TOP_Y = PLATFORM_BASE_CENTER_Y + PLATFORM_BASE_HEIGHT * .5;
+const PLATFORM_STONE_CLEARANCE = .045;
 const INSPECTION_WARM = new THREE.Color(0xffb36b);
 const INSPECTION_NEUTRAL = new THREE.Color(0xfff3df);
 const INSPECTION_COOL = new THREE.Color(0xb8d8ff);
@@ -200,8 +204,8 @@ function createStudio() {
 
   const pedestalMat = new THREE.MeshStandardMaterial({ color: 0x101916, metalness: .78, roughness: .32 });
   const goldMat = new THREE.MeshStandardMaterial({ color: 0x6f5a32, metalness: .88, roughness: .28 });
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(3.15, 3.45, .48, renderProfile.studioSegments), pedestalMat);
-  base.position.y = -1.91;
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(3.15, 3.45, PLATFORM_BASE_HEIGHT, renderProfile.studioSegments), pedestalMat);
+  base.position.y = PLATFORM_BASE_CENTER_Y;
   base.receiveShadow = true;
   base.castShadow = true;
   group.add(base);
@@ -292,6 +296,7 @@ function makeRockGeometry(seed) {
   }
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return geometry;
 }
@@ -842,6 +847,18 @@ function buildHalves(jadeTexture = null) {
     planeA, planeB, planeANormal, planeBNormal, capNormalB: normal.clone().negate(), normal, position, radius, jadeTexture,
     showcase: null
   };
+}
+
+function settleShowcaseOnPlatform() {
+  if (!halves || !stoneRoot) return;
+  stoneRoot.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(halves.group);
+  const lift = computePlatformLift(bounds.min.y, PLATFORM_TOP_Y, PLATFORM_STONE_CLEARANCE);
+  if (lift <= 0) return;
+  // Move the root once after the display rotation has settled. This keeps the
+  // two clipped halves together and avoids a per-frame bounding-box walk on mobile.
+  stoneRoot.position.y += lift;
+  stoneRoot.updateMatrixWorld(true);
 }
 
 function buildStone(profile) {
@@ -1443,6 +1460,7 @@ function animateCut(time) {
   }
 
   if (p >= 1) {
+    settleShowcaseOnPlatform();
     state.phase = 'result';
     ui.cutProgress.classList.remove('active');
     ui.newStoneButton.disabled = false;
