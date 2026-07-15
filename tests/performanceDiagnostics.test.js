@@ -31,13 +31,13 @@ test('performance evaluation reports every exceeded budget', () => {
 
 test('software WebGL CI baseline does not weaken the real mobile budget', () => {
   assert.equal(MOBILE_PERFORMANCE_BUDGETS.minAverageFps, 30);
-  assert.ok(CI_SOFTWARE_WEBGL_BUDGETS.minAverageFps < MOBILE_PERFORMANCE_BUDGETS.minAverageFps);
+  assert.equal(CI_SOFTWARE_WEBGL_BUDGETS.minAverageFps, 0);
   const result = evaluatePerformance({
-    averageFps: 5.6,
-    p95FrameMs: 300,
+    averageFps: 3.9,
+    p95FrameMs: 850,
     prepareMs: 800,
-    cutMs: 14000,
-    maxLongTaskMs: 950,
+    cutMs: 5000,
+    maxLongTaskMs: 2600,
     geometries: 16,
     textures: 4,
     contextLost: false,

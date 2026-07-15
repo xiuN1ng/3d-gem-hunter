@@ -1057,7 +1057,7 @@ function animate(time) {
   requestAnimationFrame(animate);
   if (mobileQuality && !frameBudget.shouldRender(time, lastRenderedAt)) return;
   lastRenderedAt = time;
-  const delta = Math.min(.05, (time - state.lastTime) / 1000);
+  const delta = Math.min(.25, (time - state.lastTime) / 1000);
   state.lastTime = time;
   if (mobileQuality) frameBudget.observe(delta * 1000);
   controls.update();
@@ -1100,7 +1100,7 @@ async function runPerformanceAcceptance() {
   const prepareMs = performance.now() - prepareStartedAt;
   const cutStartedAt = performance.now();
   let previousFrame = cutStartedAt;
-  const cutTimeoutMs = ciSoftwareWebgl ? 20000 : 10000;
+  const cutTimeoutMs = 10000;
   while (state.phase !== 'result' && performance.now() - cutStartedAt < cutTimeoutMs) {
     const time = await nextFrame();
     frameTimes.push(time - previousFrame);
