@@ -3,6 +3,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { computeCutPresentation, intersectGeometryWithPlane, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
+import { createSeasonStats, createSupplierInventory, finishReason, SEASON_DAYS, STARTING_MONEY } from './game/season.js';
+import { makeStoneProfile } from './game/stoneProfile.js';
+import { fbm, hash3, mulberry32, valueNoise } from './volume/noise.js';
 import './style.css';
 
 const $ = (selector) => document.querySelector(selector);
@@ -19,22 +22,28 @@ const ui = {
   sceneState: $('#sceneState'), temperature: $('#temperature'), resultCard: $('#resultCard'),
   resultBadge: $('#resultBadge'), resultName: $('#resultName'), resultSummary: $('#resultSummary'),
   resultWater: $('#resultWater'), resultColor: $('#resultColor'), resultCrack: $('#resultCrack'),
-  resultPrice: $('#resultPrice'), sellButton: $('#sellButton'), resultClose: $('#resultClose')
+  resultPrice: $('#resultPrice'), sellButton: $('#sellButton'), resultClose: $('#resultClose'),
+  supplierOverlay: $('#supplierOverlay'), supplierGrid: $('#supplierGrid'), supplierClose: $('#supplierClose'),
+  supplierDay: $('#supplierDay'), supplierFunds: $('#supplierFunds'), supplierHint: $('#supplierHint'),
+  seasonOverlay: $('#seasonOverlay'), seasonBadge: $('#seasonBadge'), seasonTitle: $('#seasonTitle'),
+  seasonSummary: $('#seasonSummary'), seasonStats: $('#seasonStats'), restartButton: $('#restartButton')
 };
 
 const state = {
-  money: 128600,
+  money: STARTING_MONEY,
   day: 1,
   angle: 18,
   depth: 46,
   seed: 713,
   stone: null,
-  phase: 'inspect',
+  phase: 'supplier',
   cutProgress: 0,
   cutStartedAt: 0,
   split: 0,
   lastTime: performance.now(),
-  hasPaidCurrent: true
+  seasonSeed: 713,
+  inventory: [],
+  stats: createSeasonStats()
 };
 
 const query = new URLSearchParams(window.location.search);
@@ -107,76 +116,8 @@ class CutTextureWorkerClient {
 
 const cutTextureWorker = new CutTextureWorkerClient();
 
-function mulberry32(seed) {
-  return function random() {
-    let t = seed += 0x6D2B79F5;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function hash3(x, y, z, seed) {
-  const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + seed * 0.137) * 43758.5453123;
-  return s - Math.floor(s);
-}
-
-const smooth = (t) => t * t * (3 - 2 * t);
-const mix = (a, b, t) => a + (b - a) * t;
-
-function valueNoise(x, y, z, seed) {
-  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
-  const xf = smooth(x - xi), yf = smooth(y - yi), zf = smooth(z - zi);
-  const h000 = hash3(xi, yi, zi, seed), h100 = hash3(xi + 1, yi, zi, seed);
-  const h010 = hash3(xi, yi + 1, zi, seed), h110 = hash3(xi + 1, yi + 1, zi, seed);
-  const h001 = hash3(xi, yi, zi + 1, seed), h101 = hash3(xi + 1, yi, zi + 1, seed);
-  const h011 = hash3(xi, yi + 1, zi + 1, seed), h111 = hash3(xi + 1, yi + 1, zi + 1, seed);
-  const x00 = mix(h000, h100, xf), x10 = mix(h010, h110, xf);
-  const x01 = mix(h001, h101, xf), x11 = mix(h011, h111, xf);
-  return mix(mix(x00, x10, yf), mix(x01, x11, yf), zf);
-}
-
-function fbm(x, y, z, seed, octaves = 5) {
-  let value = 0, amplitude = .55, frequency = 1;
-  for (let i = 0; i < octaves; i++) {
-    value += valueNoise(x * frequency, y * frequency, z * frequency, seed + i * 19) * amplitude;
-    frequency *= 2.03;
-    amplitude *= .49;
-  }
-  return value;
-}
-
 function formatMoney(value) {
   return `¥${Math.round(value).toLocaleString('zh-CN')}`;
-}
-
-function makeStoneProfile(seed) {
-  const random = mulberry32(seed);
-  const origins = ['莫西沙', '会卡', '木那', '大马坎', '南齐'];
-  const skins = ['黑乌砂 · 紧', '黄盐砂 · 细', '白盐砂 · 老', '水翻砂 · 匀', '蜡壳 · 厚'];
-  const notes = [
-    '皮壳老辣，局部有松花。灯下表现含蓄，值得一刀。',
-    '砂粒细密，蟒带绕腰。色可能吃进，但需提防内裂。',
-    '翻砂均匀，压灯见淡雾。适合避裂取中线。',
-    '皮薄水长，局部脱沙。窗口表现值得期待。',
-    '形正压手，枯癣附近有色根迹象，下刀要稳。'
-  ];
-  const quality = Math.pow(random(), 1.42);
-  const water = Math.min(1, quality * .78 + random() * .28);
-  const color = Math.min(1, quality * .7 + random() * .35);
-  const crack = Math.max(0, random() * 1.08 - quality * .28);
-  const cotton = Math.max(0, random() * .9 - water * .22);
-  const cost = Math.round((5600 + random() * 15600) / 100) * 100;
-  const weight = 12 + random() * 13;
-  const greenChance = Math.round(22 + color * 53 + random() * 8);
-  return {
-    seed, random, quality, water, color, crack, cotton, cost, weight,
-    origin: origins[Math.floor(random() * origins.length)],
-    skin: skins[Math.floor(random() * skins.length)],
-    note: notes[Math.floor(random() * notes.length)],
-    id: `${['MZ','HK','NM','DK'][Math.floor(random() * 4)]}-${String(Math.floor(1000 + random() * 8999))}`,
-    greenChance
-  };
 }
 
 const renderer = new THREE.WebGLRenderer({ antialias: !mobileQuality, alpha: false, powerPreference: 'high-performance' });
@@ -591,26 +532,27 @@ function createCutFX(radius, normal, position) {
   return group;
 }
 
-function createJadeMaterial(profile, texture, clippingPlanes = [], boost = 1) {
+function createJadeMaterial(profile, texture, clippingPlanes = [], boost = 1, faceSurface = false) {
   return new THREE.MeshPhysicalMaterial({
     color: new THREE.Color().setHSL(.39 + profile.color * .035, .78, .29 + profile.water * .18),
     map: texture,
     emissive: new THREE.Color(0x006b45),
     emissiveMap: texture,
-    emissiveIntensity: (.5 + profile.water * .7) * boost,
-    roughness: .05 + profile.cotton * .18,
+    emissiveIntensity: (.5 + profile.water * .7) * boost * (faceSurface ? .72 : 1),
+    roughness: faceSurface ? .16 + profile.cotton * .2 : .05 + profile.cotton * .18,
     metalness: 0,
     clearcoat: 1,
     clearcoatRoughness: .06,
-    transmission: (.34 + profile.water * .36) * renderProfile.transmissionFactor,
+    transmission: faceSurface ? 0 : (.34 + profile.water * .36) * renderProfile.transmissionFactor,
     thickness: 1.55,
     ior: 1.56,
     attenuationColor: new THREE.Color(0x08714d),
     attenuationDistance: 1.7,
-    transparent: true,
-    opacity: .91,
+    transparent: !faceSurface,
+    opacity: faceSurface ? 1 : .91,
     side: THREE.DoubleSide,
-    depthWrite: false,
+    depthWrite: faceSurface,
+    depthTest: !faceSurface,
     clippingPlanes,
     clipShadows: true
   });
@@ -674,8 +616,8 @@ function buildHalves(jadeTexture = null) {
   // Phase 1: use volumetric sampling for cut face texture
   jadeTexture ??= makeJadeTexture(state.stone);
 
-  const faceMaterialA = createJadeMaterial(state.stone, jadeTexture);
-  const faceMaterialB = createJadeMaterial(state.stone, jadeTexture);
+  const faceMaterialA = createJadeMaterial(state.stone, jadeTexture, [], 1, true);
+  const faceMaterialB = createJadeMaterial(state.stone, jadeTexture, [], 1, true);
   const capA = createFaceAssembly(faceGeo, faceMaterialA, points, quaternion, position);
   const capB = createFaceAssembly(faceGeo, faceMaterialB, points, quaternion, position);
 
@@ -775,25 +717,27 @@ function updateStoneUI(profile) {
   ui.inspectorNote.textContent = profile.note;
 }
 
-function newStone(pay = true) {
-  if (state.phase === 'cutting') return;
-  if (pay && state.stone && state.money < 4500) {
-    ui.sceneState.textContent = '资金不足，先出售当前切石';
-    return;
-  }
-  state.seed = Math.floor(Date.now() % 1000000 + Math.random() * 99999);
-  const profile = makeStoneProfile(state.seed);
-  if (pay && state.stone) {
+function updateLedger() {
+  ui.funds.textContent = formatMoney(state.money);
+  ui.day.textContent = Math.min(state.day, SEASON_DAYS);
+  ui.supplierDay.textContent = `第 ${Math.min(state.day, SEASON_DAYS)} / ${SEASON_DAYS} 天`;
+  ui.supplierFunds.textContent = formatMoney(state.money);
+}
+
+function purchaseStone(profile, charge = true) {
+  if (state.stone || (charge && state.money < profile.cost)) return false;
+  state.seed = profile.seed;
+  if (charge) {
     state.money -= profile.cost;
-    state.day += 1;
+    state.stats.totalSpent += profile.cost;
   }
   state.stone = profile;
   state.phase = 'inspect';
   state.split = 0;
   cameraTween = null;
-  ui.funds.textContent = formatMoney(state.money);
-  ui.day.textContent = state.day;
+  updateLedger();
   ui.resultCard.classList.remove('visible');
+  ui.supplierOverlay.classList.remove('visible');
   ui.cutButton.disabled = false;
   ui.newStoneButton.disabled = false;
   ui.sceneState.textContent = '原石扫描就绪';
@@ -801,6 +745,84 @@ function newStone(pay = true) {
   updateStoneUI(profile);
   buildStone(profile);
   controls.target.set(0, .1, 0);
+  return true;
+}
+
+function supplierRisk(profile) {
+  const crack = profile.crack > .68 ? '裂象偏高' : profile.crack > .34 ? '见绺' : '皮壳完整';
+  const lamp = profile.greenChance > 62 ? '压灯明显' : profile.greenChance > 42 ? '压灯含蓄' : '压灯微弱';
+  return { crack, lamp };
+}
+
+function renderSupplierInventory() {
+  const locked = Boolean(state.stone);
+  ui.supplierGrid.replaceChildren(...state.inventory.map((profile) => {
+    const card = document.createElement('article');
+    card.className = 'supplier-card';
+    const risk = supplierRisk(profile);
+    card.innerHTML = `<header><h3>${profile.origin} · ${profile.id}</h3><span>${profile.weight.toFixed(1)} kg</span></header>
+      <dl><div><dt>皮壳</dt><dd>${profile.skin}</dd></div><div><dt>裂象</dt><dd>${risk.crack}</dd></div><div><dt>灯感</dt><dd>${risk.lamp}</dd></div><div><dt>叫价</dt><dd class="gold">${formatMoney(profile.cost)}</dd></div></dl>
+      <p class="supplier-note">${profile.note}</p>`;
+    const button = document.createElement('button');
+    button.className = 'supplier-buy';
+    button.type = 'button';
+    button.disabled = locked || state.money < profile.cost;
+    button.textContent = locked ? '先处理当前原石' : state.money < profile.cost ? '资金不足' : `买入 · ${formatMoney(profile.cost)}`;
+    button.addEventListener('click', () => purchaseStone(profile));
+    card.appendChild(button);
+    return card;
+  }));
+  ui.supplierHint.textContent = locked
+    ? '当前已有待处理原石，可查看今日货盘，但必须先完成切割与出售。'
+    : '货盘每日固定且不可免费刷新。依据皮壳、场口与压灯反馈判断，内部品质只有切开后才会公开。';
+  ui.supplierClose.hidden = !locked;
+}
+
+function showSeasonResult(reason) {
+  state.phase = 'gameover';
+  ui.supplierOverlay.classList.remove('visible');
+  ui.resultCard.classList.remove('visible');
+  const profit = state.money - STARTING_MONEY;
+  const complete = reason === 'complete';
+  ui.seasonBadge.textContent = complete ? '卅' : '破';
+  ui.seasonTitle.textContent = complete ? '三十日挑战完成' : '资金链断裂';
+  ui.seasonSummary.textContent = complete
+    ? `三十日货盘已经走完，本季最终资金 ${formatMoney(state.money)}。`
+    : `第 ${state.day} 天已无力买入货盘中最便宜的原石，本赛季提前结束。`;
+  ui.seasonStats.innerHTML = [
+    ['最终资金', formatMoney(state.money)],
+    ['赛季盈亏', `${profit >= 0 ? '+' : '−'}${formatMoney(Math.abs(profit))}`],
+    ['完成切石', `${state.stats.stonesCut} 块`],
+    ['单笔最高', formatMoney(state.stats.bestSale)]
+  ].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join('');
+  ui.seasonOverlay.classList.add('visible');
+}
+
+function openSupplier() {
+  if (state.phase === 'cutting' || state.phase === 'preparing' || state.phase === 'gameover') return;
+  if (!state.inventory.length) state.inventory = createSupplierInventory(state.seasonSeed, state.day);
+  updateLedger();
+  const reason = !state.stone ? finishReason(state.day, state.money, state.inventory) : null;
+  if (reason) return showSeasonResult(reason);
+  if (!state.stone) state.phase = 'supplier';
+  renderSupplierInventory();
+  ui.supplierOverlay.classList.add('visible');
+}
+
+function restartSeason() {
+  state.money = STARTING_MONEY;
+  state.day = 1;
+  state.seasonSeed = Math.floor(Date.now() % 0xffffffff);
+  state.inventory = [];
+  state.stats = createSeasonStats();
+  state.stone = null;
+  state.phase = 'supplier';
+  if (stoneRoot) {
+    disposeObject(stoneRoot);
+    stoneRoot = wholeRock = halves = stoneResources = previewGroup = null;
+  }
+  ui.seasonOverlay.classList.remove('visible');
+  openSupplier();
 }
 
 function evaluateStone(profile) {
@@ -972,14 +994,27 @@ function showResult() {
 
 function sellStone() {
   if (!state.stone?.result) return;
-  state.money += state.stone.result.price;
-  ui.funds.textContent = formatMoney(state.money);
+  const salePrice = state.stone.result.price;
+  state.money += salePrice;
+  state.stats.totalSales += salePrice;
+  state.stats.stonesCut += 1;
+  state.stats.bestSale = Math.max(state.stats.bestSale, salePrice);
+  updateLedger();
   ui.sellButton.textContent = '交易完成';
   ui.sellButton.disabled = true;
   setTimeout(() => {
     ui.sellButton.disabled = false;
     ui.sellButton.textContent = '按估价出售';
-    newStone(true);
+    state.stone = null;
+    state.inventory = [];
+    ui.resultCard.classList.remove('visible');
+    if (state.day >= SEASON_DAYS) {
+      state.day = SEASON_DAYS + 1;
+      showSeasonResult('complete');
+      return;
+    }
+    state.day += 1;
+    openSupplier();
   }, 650);
 }
 
@@ -988,7 +1023,9 @@ ui.depth.addEventListener('input', updateControls);
 $('#angleMinus').addEventListener('click', () => { ui.angle.value = Math.max(-40, Number(ui.angle.value) - 1); updateControls(); });
 $('#anglePlus').addEventListener('click', () => { ui.angle.value = Math.min(40, Number(ui.angle.value) + 1); updateControls(); });
 ui.cutButton.addEventListener('click', startCut);
-ui.newStoneButton.addEventListener('click', () => newStone(true));
+ui.newStoneButton.addEventListener('click', openSupplier);
+ui.supplierClose.addEventListener('click', () => ui.supplierOverlay.classList.remove('visible'));
+ui.restartButton.addEventListener('click', restartSeason);
 ui.sellButton.addEventListener('click', sellStone);
 ui.resultClose.addEventListener('click', () => ui.resultCard.classList.remove('visible'));
 
@@ -1089,12 +1126,17 @@ function animate(time) {
   renderer.render(scene, camera);
 }
 
-state.stone = makeStoneProfile(state.seed);
-updateStoneUI(state.stone);
-buildStone(state.stone);
 updateControls();
 resize();
 requestAnimationFrame(animate);
+
+if (performanceTestMode) {
+  ui.supplierOverlay.classList.remove('visible');
+  purchaseStone(makeStoneProfile(state.seed), false);
+} else {
+  state.inventory = createSupplierInventory(state.seasonSeed, state.day);
+  openSupplier();
+}
 
 async function runPerformanceAcceptance() {
   const ciSoftwareWebgl = query.get('perf-tier') === 'ci';

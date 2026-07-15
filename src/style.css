@@ -205,6 +205,38 @@ button { color: inherit; }
 .sell-button { width: 100%; height: 32px; border: 1px solid #316f5d; background: #0f3b30; color: #bcd9ce; font-size: 10px; letter-spacing: .12em; cursor: pointer; }
 .sell-button:hover { background: #13503f; color: white; }
 
+.market-overlay { position: absolute; z-index: 30; inset: 0; display: grid; place-items: center; padding: 78px 330px 24px; background: radial-gradient(circle at 50% 44%, rgba(9,34,27,.7), rgba(1,5,4,.93)); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .28s ease, visibility .28s; }
+.market-overlay.visible { opacity: 1; visibility: visible; pointer-events: auto; }
+.market-panel { width: min(980px, 100%); max-height: 100%; overflow: auto; padding: 24px; border: 1px solid var(--gold-dim); background: linear-gradient(145deg, rgba(5,18,14,.98), rgba(7,25,20,.98)); box-shadow: 0 30px 90px #000, inset 0 0 65px rgba(66,226,177,.035); }
+.market-close { position: absolute; right: 13px; top: 10px; border: 0; background: transparent; color: #72857e; font-size: 22px; cursor: pointer; }
+.market-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding-bottom: 15px; border-bottom: 1px solid rgba(200,169,103,.22); }
+.market-heading h2, .season-panel h2 { margin: 5px 0 0; color: #d7e5dc; font: 600 23px/1.2 "Noto Serif SC", serif; letter-spacing: .13em; }
+.market-ledger { display: flex; flex-direction: column; align-items: end; gap: 5px; color: #758a81; font-size: 9px; letter-spacing: .12em; }
+.market-ledger strong { color: var(--gold); font: 600 17px/1 "Noto Serif SC", serif; }
+.market-intro { margin: 12px 0 16px; color: #73877f; font-size: 10px; line-height: 1.7; }
+.supplier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
+.supplier-card { position: relative; min-width: 0; padding: 14px; border: 1px solid #263d35; background: linear-gradient(145deg, rgba(13,34,27,.8), rgba(4,12,10,.88)); transition: border-color .2s, transform .2s; }
+.supplier-card:hover { border-color: #57745f; transform: translateY(-2px); }
+.supplier-card header { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 11px; }
+.supplier-card h3 { margin: 0; color: #c3d1ca; font: 600 15px/1.2 "Noto Serif SC", serif; }
+.supplier-card header span { color: #5d736a; font-size: 8px; letter-spacing: .1em; }
+.supplier-card dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; margin: 0 0 11px; }
+.supplier-card dl div { min-width: 0; padding: 7px; background: rgba(0,0,0,.14); }
+.supplier-card dt { margin-bottom: 3px; color: #53675f; font-size: 8px; }
+.supplier-card dd { overflow: hidden; margin: 0; color: #9eb0a8; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.supplier-card .supplier-note { min-height: 34px; margin: 0 0 11px; color: #6f827a; font-size: 9px; line-height: 1.6; }
+.supplier-buy { width: 100%; height: 33px; border: 1px solid #386f5c; background: #0c342a; color: #bdd6cc; cursor: pointer; }
+.supplier-buy:hover { background: #12503f; color: white; }
+.supplier-buy:disabled { border-color: #283630; background: #0a100e; color: #4e5d57; cursor: not-allowed; }
+.season-overlay { z-index: 40; padding: 24px; }
+.season-panel { width: min(520px, 100%); padding: 34px; text-align: center; border: 1px solid var(--gold-dim); background: linear-gradient(145deg, rgba(7,22,17,.99), rgba(5,13,11,.99)); box-shadow: 0 30px 100px #000; }
+.season-badge { width: 64px; height: 64px; display: grid; place-items: center; margin: 0 auto 14px; border: 1px solid var(--gold); border-radius: 50%; color: #e2c77f; font: 700 27px/1 "Noto Serif SC", serif; }
+.season-panel > p:not(.eyebrow) { color: #71837c; font-size: 10px; line-height: 1.8; }
+.season-stats { display: grid; grid-template-columns: repeat(2, 1fr); margin: 20px 0; border: 1px solid rgba(255,255,255,.07); }
+.season-stats div { padding: 11px; border: 1px solid rgba(255,255,255,.05); }
+.season-stats span { display: block; color: #60736b; font-size: 8px; }
+.season-stats strong { display: block; margin-top: 5px; color: #c7d5ce; font: 600 15px/1 "Noto Serif SC", serif; }
+
 .command-bar { height: 60px; position: relative; z-index: 20; display: flex; align-items: center; justify-content: space-between; padding: 0 31px; background: linear-gradient(#0d1614, #060a09); border-top: 1px solid #30463e; box-shadow: 0 -12px 25px rgba(0,0,0,.25); }
 .tips { display: flex; gap: 34px; color: #687b74; font-size: 10px; letter-spacing: .08em; }
 .tips > span { display: flex; align-items: center; gap: 10px; }
@@ -224,6 +256,8 @@ kbd { min-width: 35px; padding: 3px 6px; text-align: center; border: 1px solid #
   .control-panel { right: 10px; }
   .result-card { width: calc(100% - 490px); min-width: 380px; }
   .inspector-note { display: none; }
+  .market-overlay { padding-left: 245px; padding-right: 245px; }
+  .supplier-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -247,6 +281,15 @@ kbd { min-width: 35px; padding: 3px 6px; text-align: center; border: 1px solid #
   .result-card { left: 8px; right: 8px; bottom: 8px; width: auto; min-width: 0; transform: translateY(calc(100% + 40px)); }
   .result-card.visible { transform: translateY(0); transition-delay: .28s; }
   .result-grid { grid-template-columns: repeat(2,1fr); }
+  .market-overlay { padding: 12px; }
+  .market-panel { padding: 18px 14px; }
+  .market-heading { align-items: start; }
+  .market-heading h2 { font-size: 18px; }
+  .market-intro { margin-right: 18px; }
+  .supplier-grid { grid-template-columns: 1fr; }
+  .supplier-card { padding: 11px; }
+  .supplier-card .supplier-note { min-height: 0; }
+  .season-panel { padding: 26px 18px; }
   .command-bar { height: 52px; padding: 0 14px; }
   .tips > span:nth-child(3), .machine-status { display: none; }
 }

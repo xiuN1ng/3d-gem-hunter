@@ -84,7 +84,7 @@
             </div>
 
             <button class="cut-button" id="cutButton"><span class="button-glyph">⌁</span><span>开始切割<small>启动金刚砂轮</small></span><i>››</i></button>
-            <button class="secondary-button" id="newStoneButton">换一块原石</button>
+            <button class="secondary-button" id="newStoneButton">查看供货商货盘</button>
           </aside>
 
           <div class="result-card ornamental" id="resultCard" aria-live="polite">
@@ -99,6 +99,29 @@
             </div>
             <button id="sellButton" class="sell-button">按估价出售</button>
           </div>
+
+          <section class="market-overlay visible" id="supplierOverlay" aria-label="供货商石料货盘" aria-modal="true" role="dialog">
+            <div class="market-panel ornamental">
+              <button class="market-close" id="supplierClose" aria-label="关闭货盘">×</button>
+              <div class="market-heading">
+                <div><p class="eyebrow">SUPPLIER MARKET · 边境石场</p><h2>今日供货石料</h2></div>
+                <div class="market-ledger"><span id="supplierDay">第 1 / 30 天</span><strong id="supplierFunds">¥128,600</strong></div>
+              </div>
+              <p class="market-intro" id="supplierHint">每个交易日只能处理一块原石。根据皮壳、场口与压灯反馈判断，内部品质在切开前不会公开。</p>
+              <div class="supplier-grid" id="supplierGrid"></div>
+            </div>
+          </section>
+
+          <section class="market-overlay season-overlay" id="seasonOverlay" aria-label="赛季结算" aria-modal="true" role="dialog">
+            <div class="season-panel ornamental">
+              <span class="season-badge" id="seasonBadge">卅</span>
+              <p class="eyebrow">SEASON REPORT · 三十日赌石挑战</p>
+              <h2 id="seasonTitle">赛季完成</h2>
+              <p id="seasonSummary">三十日行程结束，账房正在清点本季盈亏。</p>
+              <div class="season-stats" id="seasonStats"></div>
+              <button class="sell-button" id="restartButton">开始新赛季</button>
+            </div>
+          </section>
         </section>
       </main>
 
