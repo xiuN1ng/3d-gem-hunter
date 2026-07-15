@@ -65,6 +65,22 @@ test('local clipping plane stays aligned after object rotation and translation',
   assert.ok(1 - worldPlane.normal.dot(worldNormal) < 1e-10);
 });
 
+test('clipping plane can be re-anchored after showcase root translation', () => {
+  const object = new THREE.Group();
+  const localNormal = new THREE.Vector3(-.22, .17, .96).normalize();
+  const localPoint = localNormal.clone().multiplyScalar(.38);
+  const initial = setWorldPlaneFromLocal(new THREE.Plane(), localNormal, localPoint, object);
+  const initialPoint = object.localToWorld(localPoint.clone());
+
+  object.position.y += .65;
+  const moved = setWorldPlaneFromLocal(new THREE.Plane(), localNormal, localPoint, object);
+  const movedPoint = object.localToWorld(localPoint.clone());
+
+  assert.ok(movedPoint.distanceTo(initialPoint) > .64);
+  assert.ok(Math.abs(moved.distanceToPoint(movedPoint)) < 1e-10);
+  assert.ok(1 - moved.normal.dot(initial.normal) < 1e-10);
+});
+
 test('desktop cut presentation separates both faces inside the cut plane', () => {
   const normal = new THREE.Vector3(.2, -.1, .97).normalize();
   const presentation = computeCutPresentation(normal, 2, 1, 1, false);
