@@ -518,7 +518,7 @@ function buildPreviewPlane() {
   const borderPoints = points.map((p) => new THREE.Vector3(p.x, p.y, .008));
   borderPoints.push(borderPoints[0].clone());
   const borderGeo = new THREE.BufferGeometry().setFromPoints(borderPoints);
-  const border = new THREE.Line(borderGeo, new THREE.LineBasicMaterial({ color: 0x52f2c6, transparent: true, opacity: .68, blending: THREE.AdditiveBlending }));
+  const border = new THREE.Line(new THREE.BufferGeometry().setFromPoints(borderPoints), new THREE.LineBasicMaterial({ color: 0x52f2c6, transparent: true, opacity: .68, blending: THREE.AdditiveBlending }));
   previewGroup.add(border);
 
   const gridPoints = [];
@@ -702,15 +702,17 @@ function createCutFaceMaterial(profile, texture) {
     sheen: .22,
     sheenColor: new THREE.Color(0x8fffd4),
     sheenRoughness: .45,
-    ior: 1.5,
+    ior: 1.6,
     specularIntensity: .92,
     specularColor: new THREE.Color(0xc8ffe9),
-    transparent: false,
-    opacity: 1,
+    transmission: 0.65 + profile.water * 0.28,
+    transmissionMap: texture,
+    attenuationColor: new THREE.Color(0x0a4d2e),
+    attenuationDistance: 1.4,
+    transparent: true,
+    opacity: 0.98,
     side: THREE.DoubleSide,
     depthWrite: true,
-    // The cap must participate in depth testing: the shell should never be visible
-    // through it when the display assembly rotates toward the viewer.
     depthTest: true,
     polygonOffset: true,
     polygonOffsetFactor: -1,
@@ -725,6 +727,7 @@ function createTransmittedGlowMaterial(texture) {
       uLightUv: { value: new THREE.Vector2(.5, .5) },
       uStrength: { value: .55 },
       uTranslucency: { value: .68 },
+      uRefraction: { value: 0.12 },
       uLightColor: { value: new THREE.Color(0xd8fff0) }
     },
     vertexShader: `
@@ -739,19 +742,25 @@ function createTransmittedGlowMaterial(texture) {
       uniform vec2 uLightUv;
       uniform float uStrength;
       uniform float uTranslucency;
+      uniform float uRefraction;
       uniform vec3 uLightColor;
       varying vec2 vUv;
       void main() {
-        vec3 jade = texture2D(uMap, vUv).rgb;
-        vec2 delta = (vUv - uLightUv) * vec2(1.0, 1.08);
-        float distance2 = dot(delta, delta);
+        // Simple refraction distortion for realistic light bending in jade
+        vec2 delta = vUv - uLightUv;
+        vec2 refractedUV = vUv + delta * uRefraction * uTranslucency * 0.8;
+        vec3 jade = texture2D(uMap, refractedUV).rgb;
+
+        float distance2 = dot(delta * vec2(1.0, 1.08), delta * vec2(1.0, 1.08));
         float core = exp(-distance2 * 18.0);
         float halo = exp(-distance2 * 4.5) * 0.32;
         float luma = dot(jade, vec3(0.2126, 0.7152, 0.0722));
         float structure = 0.58 + (1.0 - luma) * 0.82;
         float alpha = (core + halo) * uStrength * mix(0.16, 0.56, uTranslucency);
-        vec3 transmitted = mix(uLightColor, jade * 1.75, 0.42) * structure;
-        gl_FragColor = vec4(transmitted, clamp(alpha, 0.0, 0.82));
+
+        // Enhanced transmitted color with slight chromatic shift for jade realism
+        vec3 transmitted = mix(uLightColor, jade * 1.85, 0.38 + uTranslucency * 0.25) * structure;
+        gl_FragColor = vec4(transmitted, clamp(alpha, 0.0, 0.85));
       }
     `,
     transparent: true,
@@ -802,8 +811,6 @@ function buildHalves(jadeTexture = null) {
   const group = new THREE.Group();
   const normal = cutNormal(state.angle);
   const position = cutPosition(state.angle, state.depth);
-  // Keep each physical half behind its exposed cap. Half A occupies -normal;
-  // half B occupies +normal and is turned around the tangent during display.
   const planeANormal = normal.clone().negate();
   const planeA = setWorldClippingPlane(new THREE.Plane(), planeANormal, position);
   const planeBNormal = normal.clone();
@@ -819,7 +826,6 @@ function buildHalves(jadeTexture = null) {
   const faceGeo = applyPlanarCutUVs(new THREE.ShapeGeometry(shape), CUT_TEXTURE_EXTENT);
   const faceGeoB = reverseTriangleWinding(faceGeo.clone());
 
-  // Phase 1: use volumetric sampling for cut face texture
   jadeTexture ??= makeJadeTexture(state.stone);
 
   const faceMaterialA = createCutFaceMaterial(state.stone, jadeTexture);
@@ -861,12 +867,8 @@ function settleShowcaseOnPlatform() {
   const bounds = new THREE.Box3().setFromObject(halves.group);
   const lift = computePlatformLift(bounds.min.y, PLATFORM_TOP_Y, PLATFORM_STONE_CLEARANCE);
   if (lift <= 0) return;
-  // Move the root once after the display rotation has settled. This keeps the
-  // two clipped halves together and avoids a per-frame bounding-box walk on mobile.
   stoneRoot.position.y += lift;
   stoneRoot.updateMatrixWorld(true);
-  // The clipping planes are world-space objects; re-anchor them after moving
-  // the root or the shell will stay at the old height while the cap moves.
   syncHalfClippingPlanes();
 }
 
@@ -991,8 +993,6 @@ function applyInspectionLight(updateUi = true) {
     .addScaledVector(faceNormalB, .78)
     .addScaledVector(faceTangentB, x * halves.radius * .72)
     .addScaledVector(faceBitangentB, y * halves.radius * .72);
-  // Both halves are turned so their exposed caps face the same direction. Each
-  // light is placed at its own cap centre, then converted into local coordinates.
   placeLightOnRootPoint(inspectionLights[0], halves.halfA, faceLightPointA);
   placeLightOnRootPoint(inspectionLights[1], halves.halfB, faceLightPointB);
 
@@ -1006,6 +1006,7 @@ function applyInspectionLight(updateUi = true) {
     uniforms.uLightUv.value.set(settings.x, settings.y);
     uniforms.uStrength.value = settings.intensity;
     uniforms.uTranslucency.value = settings.translucency;
+    uniforms.uRefraction.value = settings.translucency * 0.18;
     uniforms.uLightColor.value.copy(lightColor);
   }
 
@@ -1234,7 +1235,6 @@ async function startCut() {
   ui.cutProgressText.textContent = '解析';
   ui.sceneState.textContent = '正在解析内部翠质';
 
-  // Let the preparation state paint before the worker starts returning data.
   await new Promise((resolve) => requestAnimationFrame(resolve));
   const normal = cutNormal(state.angle);
   const position = cutPosition(state.angle, state.depth);
