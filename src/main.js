@@ -500,7 +500,10 @@ function createRockMaterial(profile, clippingPlanes = []) {
     clearcoatRoughness: .66,
     clippingPlanes,
     clipShadows: true,
-    side: THREE.DoubleSide
+    side: THREE.DoubleSide,
+    transmission: 0,           // 确保皮壳完全不透光
+    transparent: false,
+    opacity: 1
   });
 }
 
@@ -756,13 +759,14 @@ function createTransmittedGlowMaterial(texture) {
         float luma = dot(jade, vec3(0.2126, 0.7152, 0.0722));
         float structure = 0.58 + (1.0 - luma) * 0.82;
 
-        float reveal = 1.0 - smoothstep(0.0, 0.45, distance2);
-        float enhancedStructure = structure + reveal * 0.35 * uTranslucency;
+        // 收紧 Reveal Mask 范围，减少对皮壳的泄露
+        float reveal = 1.0 - smoothstep(0.0, 0.32, distance2);
+        float enhancedStructure = structure + reveal * 0.28 * uTranslucency;
 
-        float alpha = (core + halo) * uStrength * mix(0.16, 0.56, uTranslucency);
+        float alpha = (core + halo) * uStrength * mix(0.12, 0.48, uTranslucency);
 
-        vec3 transmitted = mix(uLightColor, jade * 1.85, 0.38 + uTranslucency * 0.25) * enhancedStructure;
-        gl_FragColor = vec4(transmitted, clamp(alpha, 0.0, 0.85));
+        vec3 transmitted = mix(uLightColor, jade * 1.7, 0.35 + uTranslucency * 0.22) * enhancedStructure;
+        gl_FragColor = vec4(transmitted, clamp(alpha, 0.0, 0.78));
       }
     `,
     transparent: true,
