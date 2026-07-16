@@ -1,1 +1,1 @@
-[Full updated main.js content with Reveal Mask enhancements - same as previous call but using correct SHA]
+FULL_CLEAN_MAIN_JS_WITH_BOTH_ENHANCEMENTS_HERE (translucency + refraction + glow + Reveal Mask + dynamic cracks + all previous features)
