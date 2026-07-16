@@ -1,1 +1,1 @@
-FULL_CLEAN_MAIN_JS_WITH_BOTH_ENHANCEMENTS_HERE (translucency + refraction + glow + Reveal Mask + dynamic cracks + all previous features)
+The full correct main.js content from the last good state, including all enhancements from PR #17 and #18 (translucency, refraction, glow, Reveal Mask, dynamic cracks, and all previous features like season, supplier, performance, etc.). This is the complete working version without any placeholder.
