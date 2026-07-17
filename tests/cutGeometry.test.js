@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { applyPlanarCutUVs, computeCutPresentation, computePlatformLift, computeShowcaseTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, computePlatformLift, computeShowcaseTransform, createThickCutGeometry, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from '../src/cutGeometry.js';
 
 function pointSegmentDistanceSquared(point, a, b) {
   const edge = b.clone().sub(a);
@@ -111,6 +111,37 @@ test('cut face UVs map the sampled volume extent into the complete texture', () 
   ], 3));
   applyPlanarCutUVs(geometry, 2.4);
   assert.deepEqual([...geometry.attributes.uv.array], [0, 0, .5, .5, 1, 1]);
+});
+
+test('thick cut geometry adds a domed front and a stitched side wall', () => {
+  const surface = new THREE.ShapeGeometry(new THREE.Shape([
+    new THREE.Vector2(-1, -.7),
+    new THREE.Vector2(1, -.7),
+    new THREE.Vector2(1.2, .4),
+    new THREE.Vector2(0, 1),
+    new THREE.Vector2(-1.2, .4)
+  ]));
+  applyPlanarCutUVs(surface, 1.4);
+  const thick = createThickCutGeometry(surface, [
+    new THREE.Vector2(-1, -.7),
+    new THREE.Vector2(1, -.7),
+    new THREE.Vector2(1.2, .4),
+    new THREE.Vector2(0, 1),
+    new THREE.Vector2(-1.2, .4)
+  ], { thickness: .2, dome: .1 });
+  assert.equal(thick.groups.length, 2);
+  assert.ok(thick.groups[1].count >= (5 * 6) + surface.index.count, 'rear and side walls should close the slab');
+  assert.ok(thick.boundingBox.max.z > .1, 'the domed front should rise above the cut plane');
+  assert.ok(thick.boundingBox.min.z < -.09);
+
+  const rear = createThickCutGeometry(surface, [
+    new THREE.Vector2(-1, -.7),
+    new THREE.Vector2(1, -.7),
+    new THREE.Vector2(1.2, .4),
+    new THREE.Vector2(0, 1),
+    new THREE.Vector2(-1.2, .4)
+  ], { thickness: .2, dome: .1, outwardSign: -1 });
+  assert.ok(rear.boundingBox.min.z < -.19, 'the opposite half should dome toward the rear normal');
 });
 
 test('rear cut cap reverses its surface normal before the half is turned', () => {

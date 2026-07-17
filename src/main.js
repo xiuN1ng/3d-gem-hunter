@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { applyPlanarCutUVs, computeCutPresentation, computePlatformLift, computeShowcaseTransform, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
+import { applyPlanarCutUVs, computeCutPresentation, computePlatformLift, computeShowcaseTransform, createThickCutGeometry, intersectGeometryWithPlane, reverseTriangleWinding, setWorldPlaneFromLocal } from './cutGeometry.js';
 import { CI_SOFTWARE_WEBGL_BUDGETS, evaluatePerformance, summarizeFrameTimes } from './performanceDiagnostics.js';
 import { AdaptiveFrameBudget, createRenderProfile, detectMobileQuality, timelineProgress } from './performancePolicy.js';
 import { createSeasonStats, createSupplierInventory, finishReason, SEASON_DAYS, STARTING_MONEY } from './game/season.js';
@@ -752,6 +752,31 @@ function createCutFaceMaterial(profile, texture) {
   });
 }
 
+function createCutSideMaterial(profile) {
+  const sideTint = new THREE.Color().setHSL(
+    .37 + profile.color * .02,
+    .4 + profile.color * .08,
+    .2 + profile.water * .08
+  );
+  return new THREE.MeshPhysicalMaterial({
+    color: sideTint,
+    roughness: .42 + profile.cotton * .14,
+    metalness: 0,
+    clearcoat: .32,
+    clearcoatRoughness: .24,
+    transmission: .1 + profile.water * .16,
+    thickness: .08 + profile.water * .16,
+    attenuationColor: new THREE.Color(0x052d20),
+    attenuationDistance: .5 + profile.water * .8,
+    side: THREE.FrontSide,
+    transparent: false,
+    opacity: 1,
+    depthWrite: true,
+    depthTest: true,
+    forceSinglePass: true
+  });
+}
+
 function createTransmittedGlowMaterial(texture) {
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -818,22 +843,28 @@ function createTransmittedGlowMaterial(texture) {
   });
 }
 
-function createFaceAssembly(faceGeometry, material, points, quaternion, position, offsetDirection = 1) {
+function createFaceAssembly(faceGeometry, glowGeometry, material, sideMaterial, points, quaternion, position, offsetDirection = 1, thickness = .16, dome = .075) {
   const assembly = new THREE.Group();
   assembly.quaternion.copy(quaternion);
   assembly.position.copy(position);
 
-  const face = new THREE.Mesh(faceGeometry, material);
-  face.position.z = .012 * offsetDirection;
+  const face = new THREE.Mesh(faceGeometry, [material, sideMaterial]);
+  // Keep the front material addressable for the inspection controls while the
+  // second material shades the newly exposed rear and side walls.
+  face.userData.frontMaterial = material;
+  face.userData.sideMaterial = sideMaterial;
   face.renderOrder = 3;
   assembly.add(face);
 
-  const glow = new THREE.Mesh(faceGeometry, createTransmittedGlowMaterial(material.map));
-  glow.position.z = .016 * offsetDirection;
+  const glow = new THREE.Mesh(glowGeometry, createTransmittedGlowMaterial(material.map));
+  // The dome rises above the perimeter, so put the additive reveal just in
+  // front of its highest point; otherwise depth testing would hide the glow
+  // in the centre of a convex cap.
+  glow.position.z = offsetDirection * (thickness * .5 + dome + .008);
   glow.renderOrder = 4;
   assembly.add(glow);
 
-  const borderPoints = points.map((point) => new THREE.Vector3(point.x, point.y, .02 * offsetDirection));
+  const borderPoints = points.map((point) => new THREE.Vector3(point.x, point.y, offsetDirection * (thickness * .5 + .008)));
   borderPoints.push(borderPoints[0].clone());
   const outline = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(borderPoints),
@@ -869,13 +900,27 @@ function buildHalves(jadeTexture = null) {
   const { shape, points, quaternion, radius } = createCutShape(geometry, normal, position, state.stone.seed);
   const faceGeo = applyPlanarCutUVs(new THREE.ShapeGeometry(shape), CUT_TEXTURE_EXTENT);
   const faceGeoB = reverseTriangleWinding(faceGeo.clone());
+  const capThickness = THREE.MathUtils.clamp(radius * .075, .13, .24);
+  const capDome = capThickness * .52;
+  const thickFaceGeoA = createThickCutGeometry(faceGeo, points, {
+    thickness: capThickness,
+    dome: capDome,
+    outwardSign: 1
+  });
+  const thickFaceGeoB = createThickCutGeometry(faceGeo, points, {
+    thickness: capThickness,
+    dome: capDome,
+    outwardSign: -1
+  });
 
   jadeTexture ??= makeJadeTexture(state.stone);
 
   const faceMaterialA = createCutFaceMaterial(state.stone, jadeTexture);
   const faceMaterialB = createCutFaceMaterial(state.stone, jadeTexture);
-  const capA = createFaceAssembly(faceGeo, faceMaterialA, points, quaternion, position, 1);
-  const capB = createFaceAssembly(faceGeoB, faceMaterialB, points, quaternion, position, -1);
+  const sideMaterialA = createCutSideMaterial(state.stone);
+  const sideMaterialB = createCutSideMaterial(state.stone);
+  const capA = createFaceAssembly(thickFaceGeoA, faceGeo, faceMaterialA, sideMaterialA, points, quaternion, position, 1, capThickness, capDome);
+  const capB = createFaceAssembly(thickFaceGeoB, faceGeoB, faceMaterialB, sideMaterialB, points, quaternion, position, -1, capThickness, capDome);
 
   const halfA = new THREE.Group();
   const halfB = new THREE.Group();
@@ -1053,9 +1098,10 @@ function applyInspectionLight(updateUi = true) {
   placeLightOnRootPoint(inspectionLights[1], halves.halfB, faceLightPointB);
 
   for (const face of [halves.faceA, halves.faceB]) {
-    face.material.emissiveIntensity = .18 + settings.translucency * .28;
-    face.material.roughness = .29 - settings.translucency * .12 + state.stone.cotton * .1;
-    face.material.clearcoatRoughness = .13 - settings.translucency * .07 + state.stone.cotton * .05;
+    const frontMaterial = face.userData.frontMaterial;
+    frontMaterial.emissiveIntensity = .18 + settings.translucency * .28;
+    frontMaterial.roughness = .29 - settings.translucency * .12 + state.stone.cotton * .1;
+    frontMaterial.clearcoatRoughness = .13 - settings.translucency * .07 + state.stone.cotton * .05;
   }
   for (const glow of [halves.glowA, halves.glowB]) {
     const uniforms = glow.material.uniforms;
@@ -1517,8 +1563,8 @@ function animateCut(time) {
     halves.halfB.position.copy(presentation.halfB).add(halves.position).sub(rotatedPivot);
     syncHalfClippingPlanes();
     const reveal = THREE.MathUtils.smoothstep(p, .72, .94);
-    halves.faceA.material.emissiveIntensity = .32 + state.stone.water * .22 + reveal * .18;
-    halves.faceB.material.emissiveIntensity = halves.faceA.material.emissiveIntensity;
+    halves.faceA.userData.frontMaterial.emissiveIntensity = .32 + state.stone.water * .22 + reveal * .18;
+    halves.faceB.userData.frontMaterial.emissiveIntensity = halves.faceA.userData.frontMaterial.emissiveIntensity;
     halves.glowA.material.uniforms.uStrength.value = .12 + reveal * .24;
     halves.glowB.material.uniforms.uStrength.value = .12 + reveal * .24;
   }
