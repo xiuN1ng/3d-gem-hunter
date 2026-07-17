@@ -121,6 +121,141 @@ export function applyPlanarCutUVs(geometry, extent = 2.4) {
   return geometry;
 }
 
+/**
+ * Build a shallow, domed cut slab from a triangulated planar surface.
+ *
+ * ShapeGeometry gives us a faithful irregular contour, but by itself it has
+ * no thickness or view-dependent shading. This helper keeps the sampled front
+ * surface and UVs, adds a subtle convex polish dome, and stitches a side wall
+ * back to the cut plane. It is deliberately a small mesh (one vertex per
+ * sampled surface vertex plus two vertices per contour edge) so it is cheap on
+ * mobile GPUs while still producing real silhouette/parallax cues.
+ */
+export function createThickCutGeometry(surfaceGeometry, boundaryPoints, {
+  thickness = .14,
+  dome = .06,
+  outwardSign = 1
+} = {}) {
+  const position = surfaceGeometry.getAttribute('position');
+  const uv = surfaceGeometry.getAttribute('uv');
+  const index = surfaceGeometry.getIndex();
+  if (!position || !index || boundaryPoints.length < 3) {
+    throw new Error('createThickCutGeometry requires indexed surface geometry and a boundary');
+  }
+
+  const vertexCount = position.count;
+  const triangleIndices = Array.from({ length: index.count }, (_, offset) => index.getX(offset));
+  const radius = boundaryPoints.reduce((maximum, point) => Math.max(maximum, point.length()), 0) || 1;
+  const half = Math.max(.001, thickness * .5);
+  const frontZ = (x, y) => {
+    const normalizedRadius = THREE.MathUtils.clamp(Math.hypot(x, y) / radius, 0, 1);
+    const domeLift = dome * Math.pow(Math.max(0, 1 - normalizedRadius * normalizedRadius), 1.35);
+    return outwardSign * (half + domeLift);
+  };
+
+  const positions = [];
+  const uvs = [];
+  const pushVertex = (x, y, z, u = 0, v = 0) => {
+    positions.push(x, y, z);
+    uvs.push(u, v);
+  };
+
+  // The front surface keeps the original sampled UVs and receives the dome.
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    const x = position.getX(vertex);
+    const y = position.getY(vertex);
+    pushVertex(x, y, frontZ(x, y), uv?.getX(vertex) ?? .5, uv?.getY(vertex) ?? .5);
+  }
+
+  // ShapeGeometry normally stores only the contour vertices. Add one
+  // barycentre per source triangle so the centre of the cut can actually
+  // rise above the rim instead of remaining a flat triangulated polygon.
+  const triangleCentersStart = positions.length / 3;
+  for (let offset = 0; offset < triangleIndices.length; offset += 3) {
+    const a = triangleIndices[offset];
+    const b = triangleIndices[offset + 1];
+    const c = triangleIndices[offset + 2];
+    const x = (position.getX(a) + position.getX(b) + position.getX(c)) / 3;
+    const y = (position.getY(a) + position.getY(b) + position.getY(c)) / 3;
+    const u = ((uv?.getX(a) ?? .5) + (uv?.getX(b) ?? .5) + (uv?.getX(c) ?? .5)) / 3;
+    const v = ((uv?.getY(a) ?? .5) + (uv?.getY(b) ?? .5) + (uv?.getY(c) ?? .5)) / 3;
+    pushVertex(x, y, frontZ(x, y), u, v);
+  }
+
+  // A flat rear plane closes the slab at the original cut plane. It shares
+  // the source triangulation and is rendered with the darker side material.
+  const backStart = positions.length / 3;
+  for (let vertex = 0; vertex < vertexCount; vertex++) {
+    const x = position.getX(vertex);
+    const y = position.getY(vertex);
+    pushVertex(x, y, -outwardSign * half, uv?.getX(vertex) ?? .5, uv?.getY(vertex) ?? .5);
+  }
+
+  const sideStart = positions.length / 3;
+  const frontSide = [];
+  const backSide = [];
+  for (const point of boundaryPoints) {
+    const sideIndex = positions.length / 3;
+    pushVertex(point.x, point.y, frontZ(point.x, point.y));
+    frontSide.push(sideIndex);
+  }
+  for (const point of boundaryPoints) {
+    const sideIndex = positions.length / 3;
+    pushVertex(point.x, point.y, -outwardSign * half);
+    backSide.push(sideIndex);
+  }
+
+  const frontIndices = [];
+  for (let offset = 0; offset < triangleIndices.length; offset += 3) {
+    const a = triangleIndices[offset];
+    const b = triangleIndices[offset + 1];
+    const c = triangleIndices[offset + 2];
+    const centre = triangleCentersStart + offset / 3;
+    if (outwardSign > 0) {
+      frontIndices.push(a, b, centre, b, c, centre, c, a, centre);
+    } else {
+      frontIndices.push(a, centre, b, b, centre, c, c, centre, a);
+    }
+  }
+
+  const backIndices = [];
+  for (let offset = 0; offset < triangleIndices.length; offset += 3) {
+    const a = triangleIndices[offset] + backStart;
+    const b = triangleIndices[offset + 1] + backStart;
+    const c = triangleIndices[offset + 2] + backStart;
+    // The rear plane faces away from the front surface so the slab remains
+    // closed when the player rotates around either half.
+    if (outwardSign > 0) backIndices.push(a, c, b);
+    else backIndices.push(a, b, c);
+  }
+
+  const sideIndices = [];
+  for (let edge = 0; edge < boundaryPoints.length; edge++) {
+    const next = (edge + 1) % boundaryPoints.length;
+    const frontA = frontSide[edge];
+    const frontB = frontSide[next];
+    const backA = backSide[edge];
+    const backB = backSide[next];
+    if (outwardSign > 0) {
+      sideIndices.push(frontA, backA, backB, frontA, backB, frontB);
+    } else {
+      sideIndices.push(frontA, frontB, backB, frontA, backB, backA);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex([...frontIndices, ...backIndices, ...sideIndices]);
+  geometry.addGroup(0, frontIndices.length, 0);
+  geometry.addGroup(frontIndices.length, backIndices.length + sideIndices.length, 1);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  geometry.userData = { thickness, dome, outwardSign, backStart, sideStart };
+  return geometry;
+}
+
 /** Reverse an indexed triangle surface while preserving positions and UVs. */
 export function reverseTriangleWinding(geometry) {
   const index = geometry.getIndex();
