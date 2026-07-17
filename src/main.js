@@ -149,13 +149,13 @@ renderer.shadowMap.type = mobileQuality ? THREE.PCFShadowMap : THREE.PCFSoftShad
 renderer.transmissionResolutionScale = renderProfile.transmissionScale;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.12;
+renderer.toneMappingExposure = 1.18;
 renderer.localClippingEnabled = true;
 sceneHost.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x030807);
-scene.fog = new THREE.FogExp2(0x030807, .032);
+scene.background = new THREE.Color(0x04100c);
+scene.fog = new THREE.FogExp2(0x04100c, .024);
 
 const camera = new THREE.PerspectiveCamera(35, sceneHost.clientWidth / sceneHost.clientHeight, .1, 100);
 camera.position.set(0, .4, 9.4);
@@ -169,27 +169,35 @@ controls.minPolarAngle = Math.PI * .25;
 controls.maxPolarAngle = Math.PI * .72;
 controls.target.set(0, .12, 0);
 
-scene.add(new THREE.HemisphereLight(0x9acbb8, 0x100b08, .76));
+scene.add(new THREE.HemisphereLight(0xa8d8c8, 0x100d09, .9));
 
-const keyLight = new THREE.SpotLight(0xffd28a, 55, 18, Math.PI * .2, .65, 1.1);
+const keyLight = new THREE.SpotLight(0xffd28a, 48, 18, Math.PI * .2, .65, 1.1);
 keyLight.position.set(-4, 6.5, 5.5);
 keyLight.target.position.set(0, .2, 0);
 keyLight.castShadow = !mobileQuality;
 keyLight.shadow.mapSize.set(mobileQuality ? 512 : 1024, mobileQuality ? 512 : 1024);
 scene.add(keyLight, keyLight.target);
 
-const jadeLight = new THREE.PointLight(0x36e8ad, 18, 9, 1.5);
+const jadeLight = new THREE.PointLight(0x36e8ad, 14, 9, 1.5);
 jadeLight.position.set(3.4, 1.8, 2.8);
 scene.add(jadeLight);
 
-const rimLight = new THREE.SpotLight(0x2dbba0, 36, 16, Math.PI * .22, .8, 1.6);
+const rimLight = new THREE.SpotLight(0x2dbba0, 32, 16, Math.PI * .22, .8, 1.6);
 rimLight.position.set(3.8, 4.6, -4.5);
 rimLight.target.position.set(0, .4, 0);
 scene.add(rimLight, rimLight.target);
 
+// A low-intensity camera-mounted fill keeps the cut faces readable while the
+// player orbits the stone. The movable inspection lights still provide the
+// strong, directional reveal after cutting.
+const cameraFillLight = new THREE.PointLight(0xc9ffeb, 4.6, 11, 1.55);
+cameraFillLight.position.set(0, 1.15, 3.8);
+camera.add(cameraFillLight);
+scene.add(camera);
+
 function createStudio() {
   const group = new THREE.Group();
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0x07100e, roughness: .7, metalness: .35 });
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x0a1713, roughness: .72, metalness: .3 });
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(30, 24), floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -2.18;
@@ -202,7 +210,7 @@ function createStudio() {
   grid.material.opacity = .22;
   group.add(grid);
 
-  const pedestalMat = new THREE.MeshStandardMaterial({ color: 0x101916, metalness: .78, roughness: .32 });
+  const pedestalMat = new THREE.MeshStandardMaterial({ color: 0x14221d, metalness: .76, roughness: .3 });
   const goldMat = new THREE.MeshStandardMaterial({ color: 0x6f5a32, metalness: .88, roughness: .28 });
   const base = new THREE.Mesh(new THREE.CylinderGeometry(3.15, 3.45, PLATFORM_BASE_HEIGHT, renderProfile.studioSegments), pedestalMat);
   base.position.y = PLATFORM_BASE_CENTER_Y;
@@ -210,9 +218,18 @@ function createStudio() {
   base.castShadow = true;
   group.add(base);
 
+  // A slightly raised inset gives the stone a clear contact surface instead of
+  // letting the dark platform swallow the lower silhouette.
+  const insetMat = new THREE.MeshStandardMaterial({ color: 0x182b23, metalness: .64, roughness: .24 });
+  const inset = new THREE.Mesh(new THREE.CylinderGeometry(2.78, 2.78, .065, renderProfile.studioSegments), insetMat);
+  inset.position.y = PLATFORM_TOP_Y + .0325;
+  inset.receiveShadow = true;
+  inset.castShadow = true;
+  group.add(inset);
+
   const ring = new THREE.Mesh(new THREE.TorusGeometry(2.72, .075, 8, renderProfile.studioSegments), goldMat);
   ring.rotation.x = Math.PI / 2;
-  ring.position.y = -1.62;
+  ring.position.y = PLATFORM_TOP_Y + .08;
   group.add(ring);
 
   const clampGeometry = new THREE.BoxGeometry(.36, .28, .7);
@@ -260,9 +277,9 @@ function makeRockTexture(seed) {
       const n = fbm(x / 52, y / 52, 0, seed, 5);
       const speck = hash3(x, y, 0, seed + 92);
       const v = Math.max(0, Math.min(1, n * .86 + (speck > .965 ? .24 : 0)));
-      data[i] = 25 + v * 48;
-      data[i + 1] = 22 + v * 42;
-      data[i + 2] = 17 + v * 30;
+      data[i] = 29 + v * 56;
+      data[i + 1] = 25 + v * 50;
+      data[i + 2] = 19 + v * 36;
       data[i + 3] = 255;
     }
   }
@@ -281,16 +298,16 @@ function makeRockGeometry(seed) {
   const direction = new THREE.Vector3();
   const shape = makeRockShape(seed);
   const axisScale = rockAxisScale(seed, shape);
-  const warm = new THREE.Color(0x483c2c);
-  const dark = new THREE.Color(0x171815);
-  const moss = new THREE.Color(0x29392b);
+  const warm = new THREE.Color(0x5b4a35);
+  const dark = new THREE.Color(0x24261f);
+  const moss = new THREE.Color(0x3b563d);
   for (let i = 0; i < pos.count; i++) {
     direction.fromBufferAttribute(pos, i).normalize();
     const broad = fbm(direction.x * 1.25 + 2.3, direction.y * 1.25 - 4.1, direction.z * 1.25, seed, 5);
     const fine = fbm(direction.x * 5.7, direction.y * 5.7, direction.z * 5.7, seed + 31, 3);
     const radius = rockSurfaceRadius(direction, seed, shape);
     pos.setXYZ(i, direction.x * radius * axisScale.x, direction.y * radius * axisScale.y, direction.z * radius * axisScale.z);
-    const c = dark.clone().lerp(warm, Math.min(1, broad * .83));
+    const c = dark.clone().lerp(warm, Math.min(1, .12 + broad * .92));
     if (fine > .77) c.lerp(moss, .28);
     colors.push(c.r, c.g, c.b);
   }
@@ -492,18 +509,22 @@ function createRockMaterial(profile, clippingPlanes = []) {
   return new THREE.MeshPhysicalMaterial({
     map: texture,
     bumpMap: texture,
-    bumpScale: .16,
+    bumpScale: .1,
     vertexColors: true,
-    roughness: .83,
+    roughness: .76,
     metalness: .04,
-    clearcoat: .2,
-    clearcoatRoughness: .66,
+    clearcoat: .16,
+    clearcoatRoughness: .72,
     clippingPlanes,
     clipShadows: true,
-    side: THREE.DoubleSide,
+    // The shell is a closed outer surface. Rendering its backfaces was the
+    // main reason the player could see a dark inner shell through a cut face.
+    side: THREE.FrontSide,
     transmission: 0,           // 确保皮壳完全不透光
     transparent: false,
-    opacity: 1
+    opacity: 1,
+    depthWrite: true,
+    forceSinglePass: true
   });
 }
 
@@ -692,31 +713,39 @@ function updateCutTool(cuttingEffect, progress, time) {
 }
 
 function createCutFaceMaterial(profile, texture) {
+  const tint = new THREE.Color().setHSL(.38 + profile.color * .025, .48, .62 + profile.water * .08);
   return new THREE.MeshPhysicalMaterial({
-    color: new THREE.Color().setHSL(.38 + profile.color * .025, .2, .82),
+    color: tint,
     map: texture,
+    bumpMap: texture,
+    bumpScale: .035 + profile.cotton * .035,
     emissive: new THREE.Color(0x003d29),
     emissiveMap: texture,
-    emissiveIntensity: .32 + profile.water * .22,
-    roughness: .2 + profile.cotton * .13,
+    emissiveIntensity: .16 + profile.water * .16,
+    roughness: .24 + profile.cotton * .16,
     metalness: 0,
-    clearcoat: .92,
-    clearcoatRoughness: .08 + profile.cotton * .08,
-    sheen: .22,
+    clearcoat: .78,
+    clearcoatRoughness: .12 + profile.cotton * .08,
+    sheen: .28,
     sheenColor: new THREE.Color(0x8fffd4),
-    sheenRoughness: .45,
-    ior: 1.6,
-    specularIntensity: .92,
+    sheenRoughness: .38,
+    ior: 1.48,
+    specularIntensity: .78,
     specularColor: new THREE.Color(0xc8ffe9),
-    transmission: 0.65 + profile.water * 0.28,
+    transmission: 0.38 + profile.water * 0.34,
     transmissionMap: texture,
-    attenuationColor: new THREE.Color(0x0a4d2e),
-    attenuationDistance: 1.4,
-    transparent: true,
-    opacity: 0.98,
-    side: THREE.DoubleSide,
+    thickness: .34 + profile.water * .62,
+    attenuationColor: new THREE.Color(0x087043),
+    attenuationDistance: .8 + profile.water * 1.3,
+    // Keep the cap in the depth buffer. Transmission provides the jade-like
+    // light response; alpha blending here only makes the outer shell leak
+    // through and reads as a disconnected overlay.
+    transparent: false,
+    opacity: 1,
+    side: THREE.FrontSide,
     depthWrite: true,
     depthTest: true,
+    forceSinglePass: true,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1
@@ -728,16 +757,21 @@ function createTransmittedGlowMaterial(texture) {
     uniforms: {
       uMap: { value: texture },
       uLightUv: { value: new THREE.Vector2(.5, .5) },
-      uStrength: { value: .55 },
+      uStrength: { value: .24 },
       uTranslucency: { value: .68 },
-      uRefraction: { value: 0.12 },
+      uRefraction: { value: 0.08 },
       uLightColor: { value: new THREE.Color(0xd8fff0) }
     },
     vertexShader: `
       varying vec2 vUv;
+      varying vec3 vViewPosition;
+      varying vec3 vViewNormal;
       void main() {
         vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+        vViewPosition = -viewPosition.xyz;
+        vViewNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * viewPosition;
       }
     `,
     fragmentShader: `
@@ -748,6 +782,8 @@ function createTransmittedGlowMaterial(texture) {
       uniform float uRefraction;
       uniform vec3 uLightColor;
       varying vec2 vUv;
+      varying vec3 vViewPosition;
+      varying vec3 vViewNormal;
       void main() {
         vec2 delta = vUv - uLightUv;
         vec2 refractedUV = vUv + delta * uRefraction * uTranslucency * 0.8;
@@ -758,15 +794,17 @@ function createTransmittedGlowMaterial(texture) {
         float halo = exp(-distance2 * 4.5) * 0.32;
         float luma = dot(jade, vec3(0.2126, 0.7152, 0.0722));
         float structure = 0.58 + (1.0 - luma) * 0.82;
+        vec3 viewDir = normalize(vViewPosition);
+        float fresnel = pow(1.0 - max(dot(normalize(vViewNormal), viewDir), 0.0), 2.2);
 
         // 收紧 Reveal Mask 范围，减少对皮壳的泄露
         float reveal = 1.0 - smoothstep(0.0, 0.32, distance2);
         float enhancedStructure = structure + reveal * 0.28 * uTranslucency;
 
-        float alpha = (core + halo) * uStrength * mix(0.12, 0.48, uTranslucency);
+        float alpha = (core + halo) * uStrength * mix(0.1, 0.36, uTranslucency) * (0.72 + fresnel * .72);
 
-        vec3 transmitted = mix(uLightColor, jade * 1.7, 0.35 + uTranslucency * 0.22) * enhancedStructure;
-        gl_FragColor = vec4(transmitted, clamp(alpha, 0.0, 0.78));
+        vec3 transmitted = mix(uLightColor, jade * 1.45, 0.35 + uTranslucency * 0.22) * enhancedStructure;
+        gl_FragColor = vec4(transmitted, clamp(alpha, 0.0, 0.46));
       }
     `,
     transparent: true,
@@ -893,6 +931,14 @@ function buildStone(profile) {
   wholeRock.receiveShadow = true;
   stoneRoot.add(wholeRock);
 
+  // Seat the uncut stone on the same inset used by the showcase. This keeps
+  // the pre-cut silhouette grounded and prevents the later split animation
+  // from looking like the halves emerge from below the platform.
+  stoneRoot.updateMatrixWorld(true);
+  const wholeBounds = new THREE.Box3().setFromObject(wholeRock);
+  const initialLift = computePlatformLift(wholeBounds.min.y, PLATFORM_TOP_Y, PLATFORM_STONE_CLEARANCE);
+  if (initialLift > 0) stoneRoot.position.y += initialLift;
+
   const underGlow = new THREE.PointLight(0x20d28f, 2.4 + profile.color * 2.8, 4.2, 2);
   underGlow.position.set(.4, -1.2, .9);
   stoneRoot.add(underGlow);
@@ -973,7 +1019,11 @@ function applyInspectionLight(updateUi = true) {
   const y = (settings.y - .5) * 2;
   const lightColor = inspectionColor(settings.temperature, inspectionColorScratch);
 
-  const lightIntensity = state.phase === 'result' ? 6 + settings.intensity * 30 : 0;
+  // Keep a gentle camera fill in every mode, then layer the controllable lamp
+  // on top only after the cut. This avoids a black cut face during the reveal
+  // while preserving the feeling that the player is actually moving a lamp.
+  cameraFillLight.intensity = state.phase === 'result' ? 3.2 : 4.6;
+  const lightIntensity = state.phase === 'result' ? 5 + settings.intensity * 24 : 0;
   for (const light of inspectionLights) {
     light.color.copy(lightColor);
     light.intensity = lightIntensity;
